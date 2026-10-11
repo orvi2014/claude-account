@@ -1,0 +1,76 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Caveat:wght@700&display=swap">
+<style>
+html,body{margin:0;background:#f8f9fb}
+svg{display:block}
+.t{font-family:Kalam,cursive;fill:#1f2937}
+.h{font-family:Caveat,cursive;font-weight:700;fill:#111827}
+.s{fill:none;stroke:#1f2937;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+</style></head><body>
+<svg width="1600" height="900" viewBox="0 0 1600 900">
+<defs>
+<pattern id="hb" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(-40)"><path d="M0 7H14" stroke="#c7d2fe" stroke-width="3"/></pattern>
+<pattern id="ho" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(-40)"><path d="M0 7H14" stroke="#fed7aa" stroke-width="3"/></pattern>
+<pattern id="hg" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(-40)"><path d="M0 7H14" stroke="#bbf7d0" stroke-width="3"/></pattern>
+<marker id="ah" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path d="M1 1 L11 6 L1 11" fill="none" stroke="#1f2937" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="aho" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path d="M1 1 L11 6 L1 11" fill="none" stroke="#c2410c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<rect width="1600" height="900" fill="#f8f9fb"/>
+<text class="h" x="60" y="92" font-size="64">How claude-account works</text>
+<path class="s" d="M760 130 C 758 400, 764 640, 760 860" stroke="#d1d5db" stroke-dasharray="10 12"/>
+
+<!-- left: accounts -->
+<text class="h" x="60" y="170" font-size="40" fill="#4338ca">1 · accounts side by side</text>
+<path d="M150 205 L690 199 L696 395 L146 401 Z" fill="url(#hb)"/>
+<path class="s" d="M148 205 C 330 199, 520 207, 694 199 C 698 270, 692 330, 697 397 C 520 403, 320 395, 145 402 C 141 330, 150 270, 148 205"/>
+<text class="t" x="178" y="250" font-size="34" font-weight="700">~/.claude  (shared)</text>
+<text class="t" x="178" y="298" font-size="27">settings · agents · skills · plugins</text>
+<text class="t" x="178" y="338" font-size="27">hooks · memory · conversation history</text>
+<text class="t" x="178" y="378" font-size="24" fill="#6b7280">one copy, linked into every account</text>
+<path d="M70 600 L330 594 L336 760 L66 766 Z" fill="url(#hb)"/>
+<path class="s" d="M68 600 C 160 594, 250 602, 334 594 C 338 650, 332 710, 337 762 C 250 768, 160 760, 65 767 C 61 710, 70 650, 68 600"/>
+<text class="t" x="95" y="650" font-size="34" font-weight="700">main</text>
+<text class="t" x="95" y="695" font-size="26">your existing login</text>
+<text class="t" x="95" y="735" font-size="24" fill="#6b7280">~/.claude</text>
+<path d="M440 600 L700 594 L706 760 L436 766 Z" fill="url(#hb)"/>
+<path class="s" d="M438 600 C 530 594, 620 602, 704 594 C 708 650, 702 710, 707 762 C 620 768, 530 760, 435 767 C 431 710, 440 650, 438 600"/>
+<text class="t" x="465" y="650" font-size="34" font-weight="700">work</text>
+<text class="t" x="465" y="695" font-size="26">its own login</text>
+<text class="t" x="465" y="735" font-size="20" fill="#6b7280">~/.claude-accounts/work</text>
+<path class="s" d="M300 404 C 260 470, 220 530, 200 592" stroke-dasharray="9 9" marker-end="url(#ah)"/>
+<path class="s" d="M470 404 C 510 470, 550 530, 570 592" stroke-dasharray="9 9" marker-end="url(#ah)"/>
+<text class="t" x="320" y="520" font-size="26" fill="#4b5563">symlinked</text>
+<text class="t" x="70" y="830" font-size="26" fill="#4b5563">Each login lives in its own config dir (Keychain on macOS),</text>
+<text class="t" x="70" y="866" font-size="26" fill="#4b5563">so accounts never overwrite each other.</text>
+
+<!-- right: handoff -->
+<text class="h" x="810" y="170" font-size="40" fill="#c2410c">2 · handoff --brief</text>
+<path d="M820 230 L1070 224 L1076 470 L816 476 Z" fill="url(#ho)"/>
+<path class="s" d="M818 230 C 900 224, 990 232, 1074 224 C 1078 300, 1072 400, 1077 472 C 990 478, 900 470, 815 477 C 811 400, 820 300, 818 230"/>
+<text class="t" x="845" y="280" font-size="32" font-weight="700">old session</text>
+<path class="s" d="M850 320 H1040 M850 352 H1020 M850 384 H1045 M850 416 H1010" stroke-width="3" stroke="#9ca3af"/>
+<text class="t" x="845" y="455" font-size="26" fill="#6b7280">e.g. 17 MB</text>
+<path class="s" d="M1080 350 C 1130 340, 1170 340, 1215 350" stroke="#c2410c" marker-end="url(#aho)"/>
+<path d="M1230 236 L1530 230 L1536 466 L1226 472 Z" fill="#fef9c3"/>
+<path class="s" d="M1228 236 C 1330 230, 1430 238, 1534 230 C 1538 310, 1532 400, 1537 468 C 1430 474, 1330 466, 1225 473 C 1221 400, 1230 310, 1228 236"/>
+<text class="t" x="1255" y="282" font-size="32" font-weight="700">brief.md  ~7 KB</text>
+<text class="t" x="1255" y="325" font-size="25">Goal · Done (verified)</text>
+<text class="t" x="1255" y="360" font-size="25">In flight · Decisions</text>
+<text class="t" x="1255" y="395" font-size="25">Key pointers · Next step</text>
+<text class="t" x="1255" y="440" font-size="23" fill="#6b7280">+ git state, open PRs</text>
+<text class="t" x="1095" y="320" font-size="22" fill="#9a3412">condense</text>
+<text class="t" x="1090" y="395" font-size="22" fill="#9a3412">+ redact</text>
+<path class="s" d="M1330 478 C 1280 540, 1200 580, 1100 610" stroke="#c2410c" marker-end="url(#aho)"/>
+<path class="s" d="M1430 478 C 1450 540, 1470 570, 1480 606" stroke="#c2410c" marker-end="url(#aho)"/>
+<path d="M830 620 L1110 614 L1116 760 L826 766 Z" fill="url(#hg)"/>
+<path class="s" d="M828 620 C 920 614, 1020 622, 1114 614 C 1118 670, 1112 720, 1117 762 C 1020 768, 920 760, 825 767 C 821 720, 830 670, 828 620"/>
+<text class="t" x="855" y="668" font-size="30" font-weight="700">fresh session</text>
+<text class="t" x="855" y="708" font-size="25">on another account</text>
+<text class="t" x="855" y="742" font-size="23" fill="#6b7280">or the same one: refresh</text>
+<path d="M1380 620 L1560 614 L1566 760 L1376 766 Z" fill="url(#hg)"/>
+<path class="s" d="M1378 620 C 1440 614, 1500 622, 1564 614 C 1568 670, 1562 720, 1567 762 C 1500 768, 1440 760, 1375 767 C 1371 720, 1380 670, 1378 620"/>
+<text class="t" x="1405" y="675" font-size="30" font-weight="700">Codex</text>
+<text class="t" x="1405" y="715" font-size="24">same brief</text>
+<text class="t" x="820" y="830" font-size="26" fill="#4b5563">The new agent starts from a short brief, checks the repo,</text>
+<text class="t" x="820" y="866" font-size="26" fill="#4b5563">then continues. The old session can stay open.</text>
+</svg></body></html>

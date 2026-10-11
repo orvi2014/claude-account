@@ -246,6 +246,8 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 
 ## How it works
 
+<p align="center"><img src="docs/how-it-works.png" alt="Hand-drawn diagram: a shared ~/.claude is symlinked into the main and work accounts, each with its own login; handoff --brief condenses an old session into a ~7 KB brief that seeds a fresh session on another account, the same account (refresh), or Codex" width="900"></p>
+
 - **Isolation.** Each account is a separate [`CLAUDE_CONFIG_DIR`](https://docs.anthropic.com/en/docs/claude-code/settings) under `~/.claude-accounts/<name>`. Claude Code stores one login per configuration directory — in the macOS Keychain, or in the directory itself on Linux — so accounts never overwrite each other. The default account runs with `CLAUDE_CONFIG_DIR` unset.
 - **Sharing.** `settings.json`, `settings.local.json`, `CLAUDE.md`, `agents/`, `skills/`, `plugins/`, `commands/`, `hooks/` and `projects/` are symlinked from `~/.claude`. User-scope MCP servers are copied once when an account is added.
 - **Session discovery.** Conversations are read from the shared `projects/` directory. Open sessions are detected from each account's session registry and confirmed by process ID.
