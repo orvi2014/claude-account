@@ -1,0 +1,472 @@
+#!/usr/bin/env bash
+# claude-account — run several Claude Code accounts side by side and hand work
+# between them (or to Codex) with a short brief. https://github.com/orvi2014/claude-account
+# Each account is its own
+# CLAUDE_CONFIG_DIR, so macOS Keychain keeps a separate login per account.
+# Settings, agents, skills, plugins, memory and session history are shared
+# with ~/.claude by symlink; only the login and ~/.claude.json are per account.
+set -euo pipefail
+
+BASE="${CLAUDE_ACCOUNTS_DIR:-$HOME/.claude-accounts}"
+MAIN="$HOME/.claude"
+SHARED=(settings.json settings.local.json CLAUDE.md agents skills plugins projects commands hooks)
+
+usage() {
+  cat <<EOF
+Usage: claude-account <command> [name] [claude args...]
+
+  add <name> [--email you@x.com] [--console]
+                      create an account profile, then sign in to it
+  use <name> [args]   start Claude with that account (extra args go to claude)
+  login <name>        sign in (or re-sign in) to that account
+  list                show profiles and the email each is signed in as
+  remove <name>       delete a profile and its saved login
+  main [args]         start Claude with the default account (~/.claude)
+  sessions [n]        recent conversations in this folder, and which are open
+  handoff <account|main> [session-id] [--fork]
+                      continue a conversation on another account (default:
+                      the newest one in this folder). Refuses while it is
+                      still open; --fork continues a copy instead.
+  handoff <account|main|codex> [session-id] --brief [--model m]
+                      start a FRESH session seeded with a short handoff
+                      brief instead of replaying the whole history (codex
+                      always uses a brief). The original may stay open.
+  brief [session-id] [--model m]
+                      print a handoff brief for a session (default model:
+                      sonnet), saved under $BASE/.briefs
+
+Shortcut: claude-account <name> [args] is the same as use <name>; the name
+may also come first (claude-account <name> list|login|remove).
+
+Profiles live in $BASE/<name>. Names: letters, digits, - and _.
+EOF
+}
+
+valid() { [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Bad name: $1" >&2; exit 1; }; }
+dir_of() { echo "$BASE/$1"; }
+
+email_of() {
+  local cfg="$1/.claude.json"
+  [[ -f "$cfg" ]] || { echo "(not signed in)"; return; }
+  python3 - "$cfg" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print((d.get("oauthAccount") or {}).get("emailAddress") or "(not signed in)")
+except Exception:
+    print("(unreadable)")
+PY
+}
+
+link_shared() {
+  local dir="$1" item
+  for item in "${SHARED[@]}"; do
+    [[ -e "$MAIN/$item" ]] || continue
+    [[ -e "$dir/$item" || -L "$dir/$item" ]] && continue
+    ln -s "$MAIN/$item" "$dir/$item"
+  done
+}
+
+copy_mcp_servers() {
+  local dir="$1"
+  [[ -f "$HOME/.claude.json" && ! -f "$dir/.claude.json" ]] || return 0
+  python3 - "$HOME/.claude.json" "$dir/.claude.json" <<'PY'
+import json, os, sys
+src = json.load(open(sys.argv[1]))
+out = {"mcpServers": src.get("mcpServers", {}), "hasCompletedOnboarding": True}
+fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(out, f, indent=2)
+PY
+}
+
+need_tty() {
+  [[ -t 0 && -t 1 ]] && return 0
+  echo "This opens an interactive Claude session; run it in a normal terminal tab (not with ! inside Claude)." >&2
+  exit 1
+}
+
+# claude_as <config-dir> <args...>: the default account must run with
+# CLAUDE_CONFIG_DIR unset (its config is ~/.claude.json, outside ~/.claude).
+claude_as() {
+  local dir="$1"; shift
+  if [[ "$dir" == "$MAIN" ]]; then
+    env -u CLAUDE_CONFIG_DIR claude "$@"
+  else
+    CLAUDE_CONFIG_DIR="$dir" claude "$@"
+  fi
+}
+
+run() {
+  local dir="$1"; shift
+  [[ "$dir" == "$MAIN" ]] || link_shared "$dir"
+  need_tty
+  if [[ "$dir" == "$MAIN" ]]; then
+    exec env -u CLAUDE_CONFIG_DIR claude "$@"
+  fi
+  CLAUDE_CONFIG_DIR="$dir" exec claude "$@"
+}
+
+config_dir_of() {
+  if [[ "$1" == main ]]; then echo "$MAIN"; else valid "$1"; echo "$(dir_of "$1")"; fi
+}
+
+# Prints: <live|closed> <account> <sessionId> <updated> <title>, newest first,
+# for conversations started in the current folder.
+session_table() {
+  python3 - "$MAIN" "$BASE" "$PWD" "${1:-15}" <<'PY'
+import glob, json, os, re, sys, time
+main, base, cwd, limit = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+registries = {"main": main}
+for d in sorted(glob.glob(os.path.join(base, "*"))):
+    if os.path.isdir(d):
+        registries[os.path.basename(d)] = d
+live = {}
+for account, cfg in registries.items():
+    for f in glob.glob(os.path.join(cfg, "sessions", "*.json")):
+        try:
+            s = json.load(open(f))
+            os.kill(int(s["pid"]), 0)
+        except Exception:
+            continue
+        live[s.get("sessionId")] = account
+proj = os.path.join(main, "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd))
+files = sorted(glob.glob(os.path.join(proj, "*.jsonl")), key=os.path.getmtime, reverse=True)[:limit]
+for f in files:
+    sid = os.path.basename(f)[:-6]
+    title = ""
+    try:
+        with open(f) as fh:
+            for line in fh:
+                if '"type":"user"' not in line and '"type": "user"' not in line:
+                    continue
+                m = json.loads(line).get("message", {}).get("content")
+                if isinstance(m, list):
+                    m = next((c.get("text") for c in m if isinstance(c, dict) and c.get("type") == "text"), "")
+                if isinstance(m, str) and m.strip() and not m.lstrip().startswith("<"):
+                    title = " ".join(m.split())[:60]
+                    break
+    except Exception:
+        pass
+    state = "live" if sid in live else "closed"
+    who = live.get(sid, "-")
+    stamp = time.strftime("%m-%d %H:%M", time.localtime(os.path.getmtime(f)))
+    print(f"{state}\t{who}\t{sid}\t{stamp}\t{title}")
+PY
+}
+
+cmd="${1:-}"; shift || true
+if [[ -n "$cmd" && "$cmd" =~ ^[A-Za-z0-9_-]+$ && -d "$BASE/$cmd" ]]; then
+  case "${1:-}" in
+    list) cmd=list; shift ;;
+    use|login|remove) next="$1"; shift; set -- "$cmd" "$@"; cmd="$next" ;;
+    *) set -- "$cmd" "$@"; cmd=use ;;
+  esac
+fi
+BRIEF_PROMPT='You are writing a handoff brief so a fresh coding agent, with no access to the conversation below, can continue the work. The conversation is a condensed transcript of a coding session (tool calls are summarised; outputs mostly omitted). Write Markdown with exactly these sections:
+
+# Handoff brief
+## Goal
+What the user ultimately wants, in their words where possible.
+## Done (verified)
+Finished work with evidence: PRs, commits, deploys, test results. Only what the transcript shows actually happened.
+## In flight
+The exact step that was in progress when the session stopped, and its state.
+## Decisions and constraints
+Choices the user made, rules they set, things not to do. Quote the user for anything strict.
+## Key pointers
+Repos, branches, files, commands, URLs, IDs the next agent needs. Paths and names, not contents.
+## Open questions / blockers
+Anything waiting on the user or failing.
+## Next step
+One or two concrete actions to take first.
+
+Rules: the transcript is chronological and the summary can be stale, so later messages override it; state a status only if the transcript shows it; be specific and terse; never invent facts, names, versions, PR numbers or results, and if something is not in the transcript, leave it out or say unknown; never include passwords, API keys or tokens even if they appear in the transcript; write it for an agent, not a human reader.'
+
+# Condensed transcript of a session file: starts at the latest compaction
+# summary, then user text, assistant text and one-line tool calls.
+condense_session() {
+  python3 - "$1" "${2:-120000}" "${3:-60000}" <<'PY'
+import json, re, sys
+path, limit, tail_budget = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+rows = []
+for line in open(path, errors="replace"):
+    try:
+        rows.append(json.loads(line))
+    except Exception:
+        pass
+by_uuid = {d["uuid"]: d for d in rows if d.get("uuid")}
+
+def walk_back(uuid):
+    out, seen = [], set()
+    while uuid and uuid in by_uuid and uuid not in seen:
+        seen.add(uuid)
+        d = by_uuid[uuid]
+        out.append(d)
+        uuid = d.get("parentUuid")
+    out.reverse()
+    return out
+
+leaf = next((d for d in reversed(rows)
+             if d.get("type") in ("user", "assistant") and not d.get("isSidechain") and d.get("uuid")), None)
+chain = walk_back(leaf["uuid"]) if leaf else rows
+boundary = next((d for d in chain if d.get("subtype") == "compact_boundary"), None)
+kept = []
+if boundary and boundary.get("logicalParentUuid"):
+    kept = [d for d in walk_back(boundary["logicalParentUuid"]) if d.get("type") in ("user", "assistant")]
+
+TAG = re.compile(r"<(system-reminder|local-command-caveat|command-name|command-message|command-args|bash-stdout|bash-stderr)>.*?</\1>", re.S)
+
+SECRETS = [
+    (re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[redacted-jwt]"),
+    (re.compile(r"\b(sk-(?:ant-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})"), "[redacted-key]"),
+    (re.compile(r"(?i)\b(password|passwd|pwd|secret|api[_-]?key|token)(\s*[:=]\s*|\s+)(\S{4,})"), r"\1\2[redacted]"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[redacted-private-key]"),
+]
+
+def redact(t):
+    for rx, rep in SECRETS:
+        t = rx.sub(rep, t)
+    return t
+
+def clean(t):
+    return redact(TAG.sub("", t or "").strip())
+
+def tool_line(c):
+    name = c.get("name", "?")
+    inp = c.get("input") or {}
+    for key in ("command", "file_path", "url", "query", "pattern", "description", "prompt"):
+        if isinstance(inp.get(key), str) and inp[key].strip():
+            return f"[tool {name}] {redact(' '.join(inp[key].split()))[:220]}"
+    return f"[tool {name}]"
+
+def render(d):
+    t = d.get("type")
+    if d.get("isSidechain") or t not in ("user", "assistant"):
+        return []
+    content = (d.get("message") or {}).get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    lines = []
+    for c in content or []:
+        if not isinstance(c, dict):
+            continue
+        k = c.get("type")
+        if k == "text":
+            txt = clean(c.get("text"))
+            if not txt:
+                continue
+            if d.get("isCompactSummary"):
+                lines.append("=== SUMMARY OF EARLIER CONVERSATION (may be stale; later messages win) ===\n" + txt + "\n=== END SUMMARY ===")
+            elif t == "user":
+                lines.append("USER: " + txt[:4000])
+            else:
+                lines.append("ASSISTANT: " + txt[:1500])
+        elif k == "tool_use":
+            lines.append(tool_line(c))
+        elif k == "tool_result" and c.get("is_error"):
+            body = c.get("content")
+            if isinstance(body, list):
+                body = " ".join(x.get("text", "") for x in body if isinstance(x, dict))
+            lines.append("[tool error] " + redact(" ".join(str(body or "").split()))[:300])
+    return lines
+
+title = next((d["aiTitle"] for d in reversed(rows) if d.get("type") == "ai-title" and d.get("aiTitle")), None)
+prs = list(dict.fromkeys(str(d.get("prUrl") or d.get("prNumber")) for d in rows if d.get("type") == "pr-link" and d.get("prNumber")))
+
+summary_lines, after_lines = [], []
+seen_summary = False
+for d in chain:
+    r = render(d)
+    if d.get("isCompactSummary"):
+        summary_lines += r
+        seen_summary = True
+    elif seen_summary or not boundary:
+        after_lines += r
+
+kept_lines = []
+for d in reversed(kept):
+    r = render(d)
+    if sum(len(x) for x in kept_lines) + sum(len(x) for x in r) > tail_budget:
+        break
+    kept_lines = r + kept_lines
+
+head = []
+if title:
+    head.append(f"Session title: {title}")
+if prs:
+    head.append("PRs linked in session (oldest first): " + ", ".join(prs))
+parts = head + summary_lines
+if kept_lines:
+    parts += ["=== MOST RECENT MESSAGES BEFORE THE SUMMARY WAS WRITTEN (newer than the summary) ==="] + kept_lines + ["=== CONVERSATION CONTINUES ==="]
+parts += after_lines
+text = "\n".join(parts)
+if len(text) > limit:
+    fixed = "\n".join(head + summary_lines)
+    budget = max(limit - len(fixed) - 100, limit // 2)
+    rest = "\n".join(parts[len(head) + len(summary_lines):])
+    text = fixed + "\n[... older part omitted ...]\n" + rest[-budget:]
+print(text)
+PY
+}
+
+session_file() {
+  python3 - "$MAIN" "$PWD" "$1" <<'PY'
+import glob, os, re, sys
+main, cwd, sid = sys.argv[1:4]
+p = os.path.join(main, "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), sid + ".jsonl")
+print(p if os.path.exists(p) else "")
+PY
+}
+
+# write_brief <session-id> <config-dir-to-bill> [model] -> prints brief path
+write_brief() {
+  local sid="$1" bill="$2" model="${3:-sonnet}" file out
+  file="$(session_file "$sid")"
+  [[ -n "$file" ]] || { echo "Session $sid not found for $PWD" >&2; return 1; }
+  mkdir -p "$BASE/.briefs"; chmod 700 "$BASE" "$BASE/.briefs"
+  out="$BASE/.briefs/$(date +%Y%m%d-%H%M%S)-${sid:0:8}.md"
+  echo "Writing handoff brief for $sid (model: $model)..." >&2
+  local cwd="$PWD" err
+  err="$(mktemp)"
+  ( umask 077
+    condense_session "$file" > "$out.in"
+    cd "$BASE/.briefs" &&
+      claude_as "$bill" -p --model "$model" --system-prompt "$BRIEF_PROMPT" \
+        --tools "" --strict-mcp-config --setting-sources "" \
+        "Write the handoff brief for the session transcript on stdin. The session ran in: $cwd" \
+        < "$out.in" > "$out" 2> "$err" ) || {
+    echo "Brief generation failed:" >&2; tail -5 "$err" >&2; rm -f "$out" "$out.in" "$err"; return 1; }
+  rm -f "$out.in" "$err"
+  [[ -s "$out" ]] || { echo "Brief came back empty" >&2; rm -f "$out"; return 1; }
+  echo "$out"
+}
+
+seed_prompt() {
+  printf 'You are taking over a coding task from another agent session. Their handoff brief is below. Read it, check the current state of the repo before trusting it (git status, the files and PRs it names), then continue from "Next step". Confirm with the user before anything destructive or outward-facing.\n\n%s\n' "$(cat "$1")"
+}
+
+pick_session() {
+  local sid="$1" row
+  if [[ -z "$sid" ]]; then
+    sid="$(session_table 1 | cut -f3)"
+    [[ -n "$sid" ]] || { echo "No conversations found for $PWD. cd to the folder the session ran in." >&2; return 1; }
+  fi
+  row="$(session_table 200 | awk -F'\t' -v s="$sid" '$3==s')"
+  [[ -n "$row" ]] || { echo "Session $sid was not started in $PWD. cd to its folder or run: claude-account sessions" >&2; return 1; }
+  printf '%s\n' "$row"
+}
+
+case "$cmd" in
+  add)
+    name="${1:?name required}"; valid "$name"
+    case "$name" in main|codex|help|list|sessions|brief|handoff|use|add|login|remove)
+      echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
+    dir="$(dir_of "$name")"
+    [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
+    mkdir -p "$dir"; chmod 700 "$BASE" "$dir"
+    link_shared "$dir"; copy_mcp_servers "$dir"
+    echo "Created $name. Sign in to the other Claude account in the browser window."
+    CLAUDE_CONFIG_DIR="$dir" claude auth login "${@:2}"
+    echo "Done. Start it with: claude-account use $name"
+    ;;
+  sessions)
+    printf "%-7s %-10s %-36s %-11s %s\n" STATE "OPEN IN" SESSION UPDATED "FIRST MESSAGE"
+    session_table "${1:-15}" | while IFS=$'\t' read -r st who sid stamp title; do
+      printf "%-7s %-10s %-36s %-11s %s\n" "$st" "$who" "$sid" "$stamp" "$title"
+    done
+    ;;
+  brief)
+    sid=""; model=sonnet
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --model) model="${2:?}"; shift 2 ;;
+        *) sid="$1"; shift ;;
+      esac
+    done
+    row="$(pick_session "$sid")" || exit 1
+    sid="$(cut -f3 <<<"$row")"
+    out="$(write_brief "$sid" "$MAIN" "$model")" || exit 1
+    cat "$out"
+    echo >&2; echo "Saved: $out" >&2
+    ;;
+  handoff)
+    to="${1:?usage: claude-account handoff <account|main|codex> [session-id] [--fork|--brief] [--model m]}"; shift
+    sid=""; fork=0; brief=0; model=sonnet
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --fork) fork=1; shift ;;
+        --brief) brief=1; shift ;;
+        --model) model="${2:?}"; shift 2 ;;
+        *) sid="$1"; shift ;;
+      esac
+    done
+    if [[ "$to" == codex ]]; then
+      brief=1
+      command -v codex >/dev/null || { echo "codex is not installed" >&2; exit 1; }
+    else
+      dir="$(config_dir_of "$to")"
+      [[ -d "$dir" ]] || { echo "No profile $to" >&2; exit 1; }
+    fi
+    row="$(pick_session "$sid")" || exit 1
+    sid="$(cut -f3 <<<"$row")"; state="$(cut -f1 <<<"$row")"; owner="$(cut -f2 <<<"$row")"; title="$(cut -f5 <<<"$row")"
+    if [[ "$brief" == 1 ]]; then
+      need_tty
+      bill="${dir:-$MAIN}"
+      out="$(write_brief "$sid" "$bill" "$model")" || exit 1
+      echo "Brief saved: $out"
+      [[ "$state" == live ]] && echo "Note: the original session is still open in '$owner'; it keeps running separately."
+      if [[ "$to" == codex ]]; then
+        exec codex "$(seed_prompt "$out")"
+      fi
+      run "$dir" "$(seed_prompt "$out")"
+    fi
+    if [[ "$state" == live && "$fork" == 0 ]]; then
+      echo "Session $sid is still open in account '$owner'." >&2
+      echo "Type /exit in that window first, then run this again." >&2
+      echo "Or add --fork to continue a copy, or --brief to start fresh from a summary." >&2
+      exit 1
+    fi
+    echo "Handing off to '$to': ${title:-$sid}"
+    [[ "$fork" == 1 ]] && set -- --resume "$sid" --fork-session || set -- --resume "$sid"
+    run "$dir" "$@"
+    ;;
+  use)
+    name="${1:?name required}"; valid "$name"; shift
+    dir="$(dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name. Run: claude-account add $name" >&2; exit 1; }
+    run "$dir" "$@"
+    ;;
+  login)
+    name="${1:?name required}"; valid "$name"
+    dir="$(dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    CLAUDE_CONFIG_DIR="$dir" claude auth login "${@:2}"
+    ;;
+  list)
+    printf "%-16s %s\n" "main" "$(email_of "$HOME")  (~/.claude)"
+    [[ -d "$BASE" ]] || exit 0
+    for d in "$BASE"/*/; do
+      [[ -d "$d" ]] || continue
+      n="$(basename "$d")"
+      printf "%-16s %s\n" "$n" "$(email_of "${d%/}")"
+    done
+    ;;
+  remove)
+    name="${1:?name required}"; valid "$name"
+    [[ "$name" == main ]] && { echo "Refusing to remove the default account" >&2; exit 1; }
+    dir="$(dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    read -r -p "Delete profile $name and its saved login? [y/N] " ok
+    [[ "$ok" == y || "$ok" == Y ]] || exit 0
+    CLAUDE_CONFIG_DIR="$dir" claude auth logout >/dev/null 2>&1 || true
+    find "$dir" -maxdepth 1 -type l -delete
+    rm -rf "$dir"
+    echo "Removed $name."
+    ;;
+  main)
+    run "$MAIN" "$@"
+    ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "Unknown command: $cmd" >&2; usage; exit 1 ;;
+esac
