@@ -2,12 +2,17 @@
 
 [![test](https://github.com/orvi2014/claude-account/actions/workflows/test.yml/badge.svg)](https://github.com/orvi2014/claude-account/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platform: macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
 
 Multiple Claude Code accounts on one machine, with session handoff between them.
 
-`claude-account` keeps each Claude Code account signed in at the same time and lets you move a task from one account to another — by resuming the conversation, or by starting a fresh session from a compact handoff brief. The same brief can seed an OpenAI Codex session.
+`claude-account` keeps each Claude Code account signed in at the same time and moves work between them — by resuming a conversation, or by starting a fresh session from a compact, repository-aware handoff brief. The same brief can restart an overgrown session on the same account, or seed an OpenAI Codex session.
 
-It is a single Bash script with no daemon and no background process. It never copies or rewrites credentials.
+<p align="center">
+  <img src="demo/demo.gif" alt="claude-account: listing accounts and sessions, writing a handoff brief, and starting a fresh session on another account" width="900">
+</p>
+
+<sub>Recorded in a sandbox with example accounts and a stand-in for <code>claude</code>; reproduce with <code>bash demo/setup.sh && vhs demo/demo.tape</code>.</sub>
 
 ---
 
@@ -15,8 +20,8 @@ It is a single Bash script with no daemon and no background process. It never co
 
 - [Features](#features)
 - [Requirements](#requirements)
-- [Installation](#installation)
-- [Quick start](#quick-start)
+- [Setup](#setup)
+- [Usage](#usage)
 - [Command reference](#command-reference)
 - [Handoff modes](#handoff-modes)
 - [The handoff brief](#the-handoff-brief)
@@ -30,22 +35,31 @@ It is a single Bash script with no daemon and no background process. It never co
 
 ## Features
 
-- **Concurrent accounts.** Every account stays signed in. Run two accounts in two terminals at once.
-- **Shared environment.** Settings, agents, skills, plugins, hooks, memory and conversation history are shared across accounts; only the login differs.
+- **Concurrent accounts.** Every account stays signed in; run two accounts in two terminals at once.
+- **Shared environment.** Settings, agents, skills, plugins, hooks, memory and conversation history are shared across accounts. Only the login differs.
 - **Session handoff.** Continue a conversation on another account with `--resume`, or fork a copy of it.
-- **Brief handoff.** Start a fresh session from a structured summary of the old one, instead of replaying its full history.
+- **Brief handoff.** Start a fresh session from a structured summary instead of replaying the full history.
+- **Refresh.** Restart a session that has grown too long, on the same account, from its brief.
+- **Repository-aware briefs.** Branch, uncommitted changes, recent commits and your open pull requests are collected at handoff time and treated as ground truth.
+- **Review before launch.** Open the brief in your editor and correct it before the new agent sees it.
+- **In-session `/handoff`.** A running Claude Code session writes its own brief, from full context, at no extra cost.
 - **Codex handoff.** Seed an OpenAI Codex session with the same brief.
 - **Live-session protection.** Refuses to resume a conversation that is still open in another window.
 - **Secret redaction.** Passwords, API keys, tokens and private keys are removed before a transcript is summarised.
 
 ## Requirements
 
-- macOS or Linux
-- Bash 3.2+ (the macOS default works) and Python 3
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) on your `PATH`
-- [Codex CLI](https://github.com/openai/codex) (`codex`), only for `handoff codex`
+| | |
+|---|---|
+| Operating system | macOS or Linux |
+| Shell | Bash 3.2 or later (the macOS default works) |
+| Runtime | Python 3 |
+| Claude Code | [`claude`](https://docs.anthropic.com/en/docs/claude-code) on your `PATH` |
+| Optional | [`gh`](https://cli.github.com) for open pull requests in briefs · [`codex`](https://github.com/openai/codex) for `handoff codex` |
 
-## Installation
+## Setup
+
+### 1. Install
 
 ```sh
 mkdir -p ~/.local/bin
@@ -54,60 +68,152 @@ curl -fsSL https://raw.githubusercontent.com/orvi2014/claude-account/main/bin/cl
 chmod +x ~/.local/bin/claude-account
 ```
 
-Make sure `~/.local/bin` is on your `PATH`.
-
-## Quick start
+If `~/.local/bin` is not on your `PATH`, add it to your shell profile:
 
 ```sh
-# Add a second account; a browser window opens to sign in.
-claude-account add work
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
+exec "$SHELL"
+```
 
-# Confirm both accounts.
+<details>
+<summary>Install from a clone instead</summary>
+
+```sh
+git clone https://github.com/orvi2014/claude-account.git
+ln -s "$PWD/claude-account/bin/claude-account" ~/.local/bin/claude-account
+```
+
+`git pull` in the clone then updates the command.
+</details>
+
+### 2. Verify
+
+```sh
+claude-account list
+```
+
+Your existing Claude Code login appears as `main`. It is used as-is and never modified.
+
+### 3. Add a second account
+
+```sh
+claude-account add work
+```
+
+A browser window opens. Sign in with the **other** account — if the browser is already signed in to your main account, use a private window. Pass `--email you@company.com` to prefill the address, or `--console` to use an Anthropic Console (API billing) login.
+
+```sh
 claude-account list
 #   main   you@personal.com   (~/.claude)
 #   work   you@company.com
-
-# Start Claude Code on the second account.
-claude-account use work
-
-# Move your most recent conversation in this folder to the other account,
-# starting fresh from a brief.
-claude-account handoff work --brief
 ```
 
-Your existing `~/.claude` setup is the `main` account and is never modified.
+### 4. Enable `/handoff` inside Claude Code (optional)
+
+```sh
+claude-account install-command
+```
+
+This adds `~/.claude/commands/handoff.md`, which every account shares. In any Claude Code session you can then run `/handoff work`, `/handoff codex` or `/handoff`.
+
+### Uninstall
+
+```sh
+claude-account remove work          # repeat for each added account
+rm -f ~/.local/bin/claude-account ~/.claude/commands/handoff.md
+rm -r ~/.claude-accounts            # saved briefs
+```
+
+## Usage
+
+**Work on another account**
+
+```sh
+claude-account use work             # or simply: claude-account work
+claude-account main                 # back to the default account
+```
+
+Run each in its own terminal to use both at once. Inside Claude Code, `/status` shows the active account.
+
+**Move a task to another account**
+
+```sh
+claude-account sessions             # conversations in this folder, and where each is open
+claude-account handoff work --brief # fresh session on "work", seeded with a brief
+claude-account handoff work         # or resume the full conversation (close the original first)
+```
+
+**Restart a session that has grown too long**
+
+```sh
+claude-account refresh              # brief + fresh session on the same account
+claude-account refresh --edit       # review the brief in $EDITOR first
+```
+
+**Hand off from inside a running session**
+
+```text
+/handoff work
+```
+
+Claude writes the brief from its own context, saves it, and prints the command to continue — for example `claude-account handoff work --from ~/.claude-accounts/.briefs/….md`.
+
+**Continue in Codex**
+
+```sh
+claude-account handoff codex
+```
+
+**Work with saved briefs**
+
+```sh
+claude-account briefs                          # list, with each brief's goal
+claude-account handoff work --from <file>      # start any account from a saved brief
+claude-account brief --edit                    # write, review and print a brief without switching
+```
 
 ## Command reference
 
 | Command | Description |
 |---|---|
-| `add <name> [--email <addr>] [--console]` | Create an account profile and sign in. `--console` uses Anthropic Console (API billing). |
+| `add <name> [--email <addr>] [--console]` | Create an account profile and sign in. |
 | `use <name> [claude args…]` | Start Claude Code on an account. `claude-account <name>` is equivalent. |
 | `main [claude args…]` | Start Claude Code on the default account. |
 | `list` | List accounts and the email each is signed in as. |
-| `login <name>` | Sign an account in again, for example after the login expires. |
-| `remove <name>` | Sign out and delete a profile. Shared files are not affected. |
-| `sessions [n]` | List recent conversations in the current folder and where each is open. |
-| `handoff <target> [session-id] [--fork]` | Resume a conversation on another account. |
-| `handoff <target> [session-id] --brief [--model <m>]` | Start a fresh session on another account from a brief. |
-| `handoff codex [session-id] [--model <m>]` | Start a Codex session from a brief. |
-| `brief [session-id] [--model <m>]` | Print a handoff brief without switching. |
+| `login <name>` | Sign an account in again. |
+| `remove <name>` | Sign out and delete a profile; shared files are kept. |
+| `sessions [n]` | Recent conversations in the current folder and where each is open. |
+| `handoff <target> [id] [--fork]` | Resume a conversation on another account. |
+| `handoff <target\|codex> [id] --brief` | Start a fresh session there from a brief. |
+| `refresh [id]` | Brief and fresh session on the same account. |
+| `brief [id]` | Write and print a brief without switching. |
+| `briefs [n]` | List saved briefs. |
+| `install-command [--force]` | Install the `/handoff` command for Claude Code. |
 
-`<target>` is an account name or `main`. When no session ID is given, the most recent conversation in the current folder is used. Session IDs are listed by `sessions`.
+`<target>` is an account name or `main`. Without an `id`, the most recent conversation in the current folder is used; IDs are listed by `sessions`.
 
-Interactive commands require a terminal. They will not run through Claude Code's `!` prefix, which has no TTY.
+**Brief options** (for `handoff --brief`, `refresh` and `brief`):
+
+| Option | Effect |
+|---|---|
+| `--edit` | Open the brief in `$VISUAL` / `$EDITOR` before it is used. |
+| `--from <file>` | Use a saved brief instead of writing a new one. |
+| `--model <name>` | Model that writes the brief (default `sonnet`). |
+| `--no-repo` | Leave out repository state. |
+
+Commands that start Claude Code need a terminal; they will not run through Claude Code's `!` prefix.
 
 ## Handoff modes
 
-| | `--resume` (default) | `--fork` | `--brief` |
+| | `--resume` (default) | `--fork` | `--brief` / `refresh` |
 |---|---|---|---|
-| New session starts with | the full conversation | a copy of the full conversation | a structured brief only |
+| New session starts with | the full conversation | a copy of the full conversation | a structured brief |
 | Context loaded | entire history | entire history | typically 1–3k tokens |
 | Original session | must be closed | may stay open | may stay open |
 | Targets | Claude Code | Claude Code | Claude Code or Codex |
-| Fidelity | exact | exact | summarised |
+| Fidelity | exact | exact | summarised, then verified against the repository |
 
-Use `--resume` when you need exact continuity. Use `--brief` for long sessions, when the original is still running, or when moving to Codex. In testing, a 17 MB compacted session produced a brief of about 7 KB.
+Use `--resume` when exact continuity matters. Use a brief for long sessions, when the original is still running, or when moving to Codex. In testing, a 17 MB compacted session produced a brief of about 7 KB.
 
 ## The handoff brief
 
@@ -120,41 +226,51 @@ A brief is Markdown with fixed sections:
 | In flight | The step in progress when the session stopped |
 | Decisions and constraints | Choices and rules the user set, quoted when strict |
 | Key pointers | Repositories, branches, files, commands, URLs and IDs |
-| Open questions | Anything blocked or waiting on the user |
+| Open questions / blockers | Anything blocked or waiting on the user |
 | Next step | One or two concrete first actions |
 
-The receiving agent is instructed to verify the repository state before relying on the brief and to confirm with the user before any destructive or outward-facing action.
+The receiving agent is told to verify the repository before relying on the brief, and to confirm with the user before any destructive or outward-facing action.
 
-**Generation.** The transcript is condensed to what the model actually had in context: the latest compaction summary, the messages Claude Code retained verbatim at compaction, and everything after. It includes user messages, assistant replies, one-line tool calls and tool errors; side chains, system reminders and tool output are excluded. The condensed transcript is summarised with `claude -p` (default model `sonnet`) using a dedicated system prompt, with tools, MCP servers and project settings disabled. The cost is charged to the account you are handing off **to**.
+**Two ways to write one**
+
+| | `claude-account brief` / `--brief` | `/handoff` inside Claude Code |
+|---|---|---|
+| Written by | a separate `claude -p` call | the running session itself |
+| Input | condensed transcript + repository state | full live context + repository state |
+| Billed to | the account receiving the handoff | the current account |
+| Works after the session has closed | yes | no |
+
+**How the transcript is condensed.** The input reflects what the model actually had in context: the latest compaction summary, the messages Claude Code retained verbatim when it compacted, and everything after. It keeps user messages, assistant replies, one-line tool calls and tool errors, and drops side chains, system reminders and tool output. Repository state is appended as a block the model treats as ground truth. The `claude -p` call uses a dedicated system prompt with tools, MCP servers and project settings disabled.
 
 Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 
 ## How it works
 
-- **Isolation.** Each account is a separate [`CLAUDE_CONFIG_DIR`](https://docs.anthropic.com/en/docs/claude-code/settings) under `~/.claude-accounts/<name>`. Claude Code stores one login per configuration directory (in the macOS Keychain, or in the directory itself on Linux), so accounts never overwrite each other. The default account runs with `CLAUDE_CONFIG_DIR` unset.
-- **Sharing.** `settings.json`, `settings.local.json`, `CLAUDE.md`, `agents/`, `skills/`, `plugins/`, `commands/`, `hooks/` and `projects/` are symlinked from `~/.claude`. User-scope MCP servers are copied once, when the account is added.
-- **Session discovery.** Conversations are read from the shared `projects/` directory. Open sessions are detected from each account's session registry and verified by process ID.
+- **Isolation.** Each account is a separate [`CLAUDE_CONFIG_DIR`](https://docs.anthropic.com/en/docs/claude-code/settings) under `~/.claude-accounts/<name>`. Claude Code stores one login per configuration directory — in the macOS Keychain, or in the directory itself on Linux — so accounts never overwrite each other. The default account runs with `CLAUDE_CONFIG_DIR` unset.
+- **Sharing.** `settings.json`, `settings.local.json`, `CLAUDE.md`, `agents/`, `skills/`, `plugins/`, `commands/`, `hooks/` and `projects/` are symlinked from `~/.claude`. User-scope MCP servers are copied once when an account is added.
+- **Session discovery.** Conversations are read from the shared `projects/` directory. Open sessions are detected from each account's session registry and confirmed by process ID.
 
 ## Security and privacy
 
-- No credentials are read, copied or modified; sign-in is handled by Claude Code itself.
+- No credentials are read, copied or modified; sign-in is handled entirely by Claude Code.
 - Before summarisation, labelled passwords, API keys (Anthropic, OpenAI, GitHub, Slack, AWS, Google), JWTs and private keys are replaced with `[redacted]`. Redaction is pattern-based; an unlabelled secret in free text may not be caught.
 - Condensed transcripts are sent only to Claude, through your own Claude Code login.
 - Because `projects/` is shared, every account can read every conversation. Do not use this layout where accounts must be kept strictly separate.
 
 ## Limitations
 
-- **Terms of use.** Holding more than one account for your own use is common. Creating accounts to evade usage limits, or sharing or reselling accounts, is not permitted under Anthropic's policies. This tool does not switch accounts automatically and is not intended for that purpose.
-- **Summaries are lossy.** A brief can omit detail. Review the first actions of a session started from a brief.
+- **Terms of use.** Holding more than one account for your own use is common. Creating accounts to evade usage limits, or sharing or reselling accounts, is not permitted under Anthropic's policies. This tool never switches accounts automatically and is not intended for that purpose.
+- **Summaries are lossy.** A brief can omit detail; review the first actions of a session started from one.
 - **Unofficial.** Claude Code's on-disk session format is not a public interface and may change between versions.
 
 ## Development
 
 ```sh
-bash tests/run.sh
+bash tests/run.sh                          # 50 tests
+bash demo/setup.sh && vhs demo/demo.tape   # re-record the demo GIF (requires vhs)
 ```
 
-The test suite is self-contained. It uses a temporary `HOME`, stub `claude` and `codex` executables and synthetic session files, and never touches your real configuration or credentials. CI runs it on Ubuntu and macOS.
+The test suite is self-contained: a temporary `HOME`, stand-in `claude`, `codex`, `gh` and editor executables, and synthetic session files. It never touches your real configuration or credentials. CI runs it on Ubuntu and macOS.
 
 Issues and pull requests are welcome.
 

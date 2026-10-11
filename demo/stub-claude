@@ -1,0 +1,18 @@
+#!/bin/sh
+# Stand-in for `claude` used only to record the demo.
+if echo " $* " | grep -q -- " -p "; then
+  cat > /dev/null
+  sleep 1.2
+  cat "$DEMO_ROOT/sample-brief.md"
+  exit 0
+fi
+cfg="${CLAUDE_CONFIG_DIR:-$HOME}"
+[ -n "$CLAUDE_CONFIG_DIR" ] || cfg="$HOME"
+email=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['oauthAccount']['emailAddress'])" "$cfg/.claude.json" 2>/dev/null)
+printf '\n\033[38;5;173m✻ Claude Code\033[0m  \033[2m%s\033[0m\n' "$email"
+case "$1" in
+  --resume) printf '\033[2m  resumed conversation %s\033[0m\n' "$2" ;;
+  "") ;;
+  *) printf '\033[2m  fresh session, started from the handoff brief (%s lines)\033[0m\n\n' "$(printf '%s' "$1" | wc -l | tr -d ' ')"
+     printf '> Taking over. Checking git status and PR #128 before continuing…\n' ;;
+esac

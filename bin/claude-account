@@ -23,17 +23,23 @@ Usage: claude-account <command> [name] [claude args...]
   remove <name>       delete a profile and its saved login
   main [args]         start Claude with the default account (~/.claude)
   sessions [n]        recent conversations in this folder, and which are open
-  handoff <account|main> [session-id] [--fork]
-                      continue a conversation on another account (default:
-                      the newest one in this folder). Refuses while it is
-                      still open; --fork continues a copy instead.
-  handoff <account|main|codex> [session-id] --brief [--model m]
-                      start a FRESH session seeded with a short handoff
-                      brief instead of replaying the whole history (codex
-                      always uses a brief). The original may stay open.
-  brief [session-id] [--model m]
-                      print a handoff brief for a session (default model:
-                      sonnet), saved under $BASE/.briefs
+
+Handoff (default session: the newest one in this folder)
+  handoff <account|main> [id] [--fork]
+                      resume the conversation on another account; refuses
+                      while it is open, --fork continues a copy instead
+  handoff <account|main|codex> [id] --brief
+                      start a FRESH session there from a short brief
+  refresh [id]        brief + fresh session on the same account (for a
+                      session that has grown too long)
+  brief [id]          print a brief without switching
+    brief options:    --edit (review in $EDITOR first)  --model <m>
+                      --no-repo (skip git/PR state)  --from <file> (reuse a
+                      saved brief with handoff or refresh)
+  briefs [n]          list saved briefs
+  install-command [--force]
+                      add a /handoff command to Claude Code, so a running
+                      session can write its own brief
 
 Shortcut: claude-account <name> [args] is the same as use <name>; the name
 may also come first (claude-account <name> list|login|remove).
@@ -181,7 +187,7 @@ Anything waiting on the user or failing.
 ## Next step
 One or two concrete actions to take first.
 
-Rules: the transcript is chronological and the summary can be stale, so later messages override it; state a status only if the transcript shows it; be specific and terse; never invent facts, names, versions, PR numbers or results, and if something is not in the transcript, leave it out or say unknown; never include passwords, API keys or tokens even if they appear in the transcript; write it for an agent, not a human reader.'
+If a CURRENT REPOSITORY STATE block is present it was collected at handoff time and is ground truth for the branch, uncommitted work, commits and open pull requests: use it to correct the transcript, and reflect it in In flight and Key pointers. Rules: the transcript is chronological and the summary can be stale, so later messages override it; state a status only if the transcript shows it; be specific and terse; never invent facts, names, versions, PR numbers or results, and if something is not in the transcript, leave it out or say unknown; never include passwords, API keys or tokens even if they appear in the transcript; write it for an agent, not a human reader.'
 
 # Condensed transcript of a session file: starts at the latest compaction
 # summary, then user text, assistant text and one-line tool calls.
@@ -320,18 +326,76 @@ PY
 }
 
 # write_brief <session-id> <config-dir-to-bill> [model] -> prints brief path
+# Facts about the repository in $PWD at handoff time (git, and open PRs via gh).
+repo_facts() {
+  python3 - "$PWD" <<'PY'
+import json, shutil, subprocess, sys
+cwd = sys.argv[1]
+def run(cmd, timeout=8):
+    try:
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:
+        return None
+if run(["git", "rev-parse", "--is-inside-work-tree"]) != "true":
+    sys.exit(0)
+out = ["=== CURRENT REPOSITORY STATE (collected at handoff time; newer than the transcript) ==="]
+out.append("Branch: " + (run(["git", "branch", "--show-current"]) or run(["git", "rev-parse", "--short", "HEAD"]) or "unknown"))
+ab = run(["git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD"])
+if ab and len(ab.split()) == 2:
+    behind, ahead = ab.split()
+    out.append(f"Upstream: {ahead} ahead, {behind} behind")
+status = (run(["git", "status", "--short"]) or "").splitlines()
+out.append("Uncommitted changes: " + (f"{len(status)} paths" if status else "none"))
+out += ["  " + line for line in status[:25]]
+if len(status) > 25:
+    out.append(f"  ... {len(status) - 25} more")
+log = (run(["git", "log", "--oneline", "-8"]) or "").splitlines()
+if log:
+    out.append("Recent commits:")
+    out += ["  " + line for line in log]
+if shutil.which("gh"):
+    prs = run(["gh", "pr", "list", "--author", "@me", "--state", "open", "--limit", "10",
+               "--json", "number,title,headRefName,url"], timeout=12)
+    try:
+        prs = json.loads(prs) if prs else None
+    except Exception:
+        prs = None
+    if prs is not None:
+        out.append("Your open pull requests: " + ("none" if not prs else ""))
+        out += [f"  #{p['number']} {p['title']} ({p['headRefName']}) {p['url']}" for p in prs]
+print("\n".join(out))
+PY
+}
+
+briefs_dir() {
+  mkdir -p "$BASE/.briefs"; chmod 700 "$BASE" "$BASE/.briefs"
+  echo "$BASE/.briefs"
+}
+
+# new_brief_path <tag>: a unique, private, empty .md file in the briefs dir
+new_brief_path() {
+  local dir f
+  dir="$(briefs_dir)"
+  f="$(umask 077; mktemp "$dir/$(date +%Y%m%d-%H%M%S)-$1-XXXXXX")" || return 1
+  mv "$f" "$f.md" && echo "$f.md"
+}
+
+# write_brief <session-id> <config-dir-to-bill> -> prints brief path.
+# Honours BRIEF_MODEL and BRIEF_REPO (1 = append repository state).
 write_brief() {
-  local sid="$1" bill="$2" model="${3:-sonnet}" file out
+  local sid="$1" bill="$2" model="${BRIEF_MODEL:-sonnet}" file out dir
   file="$(session_file "$sid")"
   [[ -n "$file" ]] || { echo "Session $sid not found for $PWD" >&2; return 1; }
-  mkdir -p "$BASE/.briefs"; chmod 700 "$BASE" "$BASE/.briefs"
-  out="$BASE/.briefs/$(date +%Y%m%d-%H%M%S)-${sid:0:8}.md"
+  dir="$(briefs_dir)"
+  out="$(new_brief_path "${sid:0:8}")" || return 1
   echo "Writing handoff brief for $sid (model: $model)..." >&2
   local cwd="$PWD" err
   err="$(mktemp)"
   ( umask 077
     condense_session "$file" > "$out.in"
-    cd "$BASE/.briefs" &&
+    [[ "${BRIEF_REPO:-1}" == 1 ]] && repo_facts >> "$out.in"
+    cd "$dir" &&
       claude_as "$bill" -p --model "$model" --system-prompt "$BRIEF_PROMPT" \
         --tools "" --strict-mcp-config --setting-sources "" \
         "Write the handoff brief for the session transcript on stdin. The session ran in: $cwd" \
@@ -340,6 +404,86 @@ write_brief() {
   rm -f "$out.in" "$err"
   [[ -s "$out" ]] || { echo "Brief came back empty" >&2; rm -f "$out"; return 1; }
   echo "$out"
+}
+
+edit_brief() {
+  need_tty
+  ${VISUAL:-${EDITOR:-vi}} "$1" < /dev/tty > /dev/tty
+  [[ -s "$1" ]] || { echo "Brief is empty after editing; stopping." >&2; exit 1; }
+}
+
+# Config dir of the account that owns a session: where it is open, else the
+# account this shell is running under, else main.
+owner_dir() {
+  local owner="$1"
+  if [[ -n "$owner" && "$owner" != "-" ]]; then
+    [[ "$owner" == main ]] && echo "$MAIN" || echo "$BASE/$owner"
+  elif [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+    echo "$CLAUDE_CONFIG_DIR"
+  else
+    echo "$MAIN"
+  fi
+}
+
+account_label() {
+  [[ "$1" == "$MAIN" ]] && echo main || basename "$1"
+}
+
+# start_from_brief <target: config dir or "codex"> <brief file>
+start_from_brief() {
+  local target="$1" file="$2"
+  need_tty
+  [[ -s "$file" ]] || { echo "Brief not found or empty: $file" >&2; exit 1; }
+  if [[ "$target" == codex ]]; then
+    exec codex "$(seed_prompt "$file")"
+  fi
+  run "$target" "$(seed_prompt "$file")"
+}
+
+install_command() {
+  local force="$1" dest="$MAIN/commands/handoff.md"
+  mkdir -p "$MAIN/commands"
+  if [[ -e "$dest" && "$force" != 1 ]]; then
+    echo "$dest already exists; add --force to replace it" >&2; exit 1
+  fi
+  cat > "$dest" <<'CMD'
+---
+description: Write a handoff brief of this session, then continue it on another account, in a fresh session, or in Codex
+argument-hint: "[account | main | codex]"
+---
+
+Write a handoff brief so a fresh agent, with no access to this conversation, can continue the work.
+
+First check the current repository state and treat it as ground truth: `git status --short`, `git branch --show-current`, `git log --oneline -8`, and `gh pr list --author @me --state open` if `gh` is available.
+
+Use exactly these Markdown sections:
+
+# Handoff brief
+## Goal
+## Done (verified)
+## In flight
+## Decisions and constraints
+## Key pointers
+## Open questions / blockers
+## Next step
+
+Be specific and terse. Only state what actually happened in this session or what the repository shows. Quote the user for strict rules. Never include passwords, API keys or tokens.
+
+Save it by running this command, with the brief as the heredoc body:
+
+```
+claude-account save-brief <<'BRIEF'
+...the brief...
+BRIEF
+```
+
+It prints the saved path. Then reply with one short message containing:
+- the saved path;
+- the command to continue, to be run in a normal terminal tab: `claude-account handoff $ARGUMENTS --from <path>`, or, if no account was given, `claude-account refresh --from <path>` (a fresh session on this account);
+- a note that they can /exit this window first.
+CMD
+  echo "Installed /handoff at $dest"
+  echo "In Claude Code: /handoff work   (or /handoff codex, or just /handoff)"
 }
 
 seed_prompt() {
@@ -360,7 +504,7 @@ pick_session() {
 case "$cmd" in
   add)
     name="${1:?name required}"; valid "$name"
-    case "$name" in main|codex|help|list|sessions|brief|handoff|use|add|login|remove)
+    case "$name" in main|codex|help|list|sessions|brief|briefs|handoff|refresh|use|add|login|remove|save-brief|install-command)
       echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
     dir="$(dir_of "$name")"
     [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
@@ -377,49 +521,86 @@ case "$cmd" in
     done
     ;;
   brief)
-    sid=""; model=sonnet
+    sid=""; edit=0; BRIEF_MODEL=sonnet; BRIEF_REPO=1
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --model) model="${2:?}"; shift 2 ;;
+        --model) BRIEF_MODEL="${2:?}"; shift 2 ;;
+        --no-repo) BRIEF_REPO=0; shift ;;
+        --edit) edit=1; shift ;;
         *) sid="$1"; shift ;;
       esac
     done
     row="$(pick_session "$sid")" || exit 1
     sid="$(cut -f3 <<<"$row")"
-    out="$(write_brief "$sid" "$MAIN" "$model")" || exit 1
+    out="$(write_brief "$sid" "$(owner_dir "$(cut -f2 <<<"$row")")")" || exit 1
+    [[ "$edit" == 1 ]] && edit_brief "$out"
     cat "$out"
-    echo >&2; echo "Saved: $out" >&2
+    echo >&2; echo "Saved: ${out/#$HOME/~}" >&2
     ;;
-  handoff)
-    to="${1:?usage: claude-account handoff <account|main|codex> [session-id] [--fork|--brief] [--model m]}"; shift
-    sid=""; fork=0; brief=0; model=sonnet
+  briefs)
+    dir="$(briefs_dir)"
+    found=0
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      found=1
+      goal="$(awk '/^## Goal/{getline; while ($0 ~ /^[[:space:]]*$/) getline; print; exit}' "$f" | cut -c1-70)"
+      printf "%s  %s\n" "$f" "$goal"
+    done < <(ls -t "$dir"/*.md 2>/dev/null | head -"${1:-15}")
+    [[ "$found" == 1 ]] || echo "No briefs yet."
+    ;;
+  save-brief)
+    out="$(new_brief_path inline)" || exit 1
+    cat > "$out"
+    [[ -s "$out" ]] || { rm -f "$out"; echo "Nothing on stdin" >&2; exit 1; }
+    echo "$out"
+    ;;
+  install-command)
+    install_command "$([[ "${1:-}" == --force ]] && echo 1)"
+    ;;
+  refresh|handoff)
+    if [[ "$cmd" == handoff ]]; then
+      to="${1:?usage: claude-account handoff <account|main|codex> [session-id] [--fork|--brief|--from file] [--edit] [--model m] [--no-repo]}"; shift
+    else
+      to=""
+    fi
+    sid=""; fork=0; brief=0; edit=0; from=""; BRIEF_MODEL=sonnet; BRIEF_REPO=1
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --fork) fork=1; shift ;;
         --brief) brief=1; shift ;;
-        --model) model="${2:?}"; shift 2 ;;
+        --edit) edit=1; brief=1; shift ;;
+        --from) from="${2:?}"; shift 2 ;;
+        --model) BRIEF_MODEL="${2:?}"; shift 2 ;;
+        --no-repo) BRIEF_REPO=0; shift ;;
         *) sid="$1"; shift ;;
       esac
     done
+    [[ "$cmd" == refresh ]] && brief=1
     if [[ "$to" == codex ]]; then
       brief=1
       command -v codex >/dev/null || { echo "codex is not installed" >&2; exit 1; }
-    else
+      dir=codex
+    elif [[ -n "$to" ]]; then
       dir="$(config_dir_of "$to")"
       [[ -d "$dir" ]] || { echo "No profile $to" >&2; exit 1; }
     fi
+    if [[ -n "$from" ]]; then
+      [[ -n "$to" ]] || dir="$(owner_dir "")"
+      [[ "$edit" == 1 ]] && edit_brief "$from"
+      echo "Starting $( [[ "$dir" == codex ]] && echo codex || account_label "$dir" ) from $from"
+      start_from_brief "$dir" "$from"
+    fi
     row="$(pick_session "$sid")" || exit 1
     sid="$(cut -f3 <<<"$row")"; state="$(cut -f1 <<<"$row")"; owner="$(cut -f2 <<<"$row")"; title="$(cut -f5 <<<"$row")"
+    [[ -n "$to" ]] || dir="$(owner_dir "$owner")"
     if [[ "$brief" == 1 ]]; then
       need_tty
-      bill="${dir:-$MAIN}"
-      out="$(write_brief "$sid" "$bill" "$model")" || exit 1
-      echo "Brief saved: $out"
-      [[ "$state" == live ]] && echo "Note: the original session is still open in '$owner'; it keeps running separately."
-      if [[ "$to" == codex ]]; then
-        exec codex "$(seed_prompt "$out")"
-      fi
-      run "$dir" "$(seed_prompt "$out")"
+      bill="$dir"; [[ "$dir" == codex ]] && bill="$(owner_dir "$owner")"
+      out="$(write_brief "$sid" "$bill")" || exit 1
+      echo "Brief saved: ${out/#$HOME/~}"
+      [[ "$edit" == 1 ]] && edit_brief "$out"
+      [[ "$state" == live ]] && echo "Note: the original session is still open in '$owner'; close it when the new one is running."
+      start_from_brief "$dir" "$out"
     fi
     if [[ "$state" == live && "$fork" == 0 ]]; then
       echo "Session $sid is still open in account '$owner'." >&2

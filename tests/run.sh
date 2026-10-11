@@ -28,7 +28,15 @@ cat > "$T/fake/codex" <<'F'
 #!/bin/sh
 echo "CODEX ARGS=$*"
 F
-chmod +x "$T/fake/claude" "$T/fake/codex"
+cat > "$T/fake/gh" <<'F'
+#!/bin/sh
+echo '[{"number":42,"title":"Add widgets","headRefName":"feat/widgets","url":"https://example.com/pr/42"}]'
+F
+cat > "$T/fake/editor" <<'F'
+#!/bin/sh
+echo "EDITED-MARKER" >> "$1"
+F
+chmod +x "$T/fake/claude" "$T/fake/codex" "$T/fake/gh" "$T/fake/editor"
 export PATH="$T/fake:$PATH" FAKE_LOG="$T/log"
 
 pass=0; fail=0
@@ -41,6 +49,8 @@ fi
 mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 cd "$T/work"
+git init -q -b main . && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "initial commit marker"
+echo change > dirty.txt
 PROJ="$HOME/.claude/projects/$(echo "$T/work" | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$PROJ"
 mk_session() {
@@ -114,6 +124,51 @@ ok "handoff --brief bills the target account" 'grep -q "CONFIG=$CLAUDE_ACCOUNTS_
 ok "handoff --brief starts fresh with the brief" '[[ "$out" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=You are taking over"* && "$out" == *"Ship it"* && "$out" != *"--resume"* ]]'
 out="$(tty_run "$BIN" handoff codex)"
 ok "handoff codex seeds codex with the brief" '[[ "$out" == *"CODEX ARGS=You are taking over"* ]]'
+
+# repository state in the brief
+"$BIN" brief >/dev/null 2>&1
+ok "brief input includes repository state" 'grep -q "CURRENT REPOSITORY STATE" "$FAKE_LOG.stdin" && grep -q "Branch: main" "$FAKE_LOG.stdin" && grep -q "Uncommitted changes: 1 paths" "$FAKE_LOG.stdin" && grep -q "initial commit marker" "$FAKE_LOG.stdin"'
+ok "brief input includes open PRs from gh" 'grep -q "#42 Add widgets (feat/widgets)" "$FAKE_LOG.stdin"'
+"$BIN" brief --no-repo >/dev/null 2>&1
+ok "--no-repo leaves repository state out" '! grep -q "CURRENT REPOSITORY STATE" "$FAKE_LOG.stdin"'
+
+# --edit
+out="$(EDITOR="$T/fake/editor" tty_run "$BIN" handoff work --brief --edit)"
+ok "--edit opens the brief before launch" '[[ "$out" == *"EDITED-MARKER"* && "$out" == *"ARGS=You are taking over"* ]]'
+
+# refresh
+out="$(tty_run "$BIN" refresh)"
+ok "refresh starts fresh on the same (default) account" '[[ "$out" == *"CONFIG=<unset> ARGS=You are taking over"* && "$out" != *"--resume"* ]]'
+out="$(CLAUDE_CONFIG_DIR="$CLAUDE_ACCOUNTS_DIR/work" tty_run "$BIN" refresh)"
+ok "refresh uses the account this shell runs under" '[[ "$out" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=You are taking over"* ]]'
+sleep 600 & LIVE=$!
+mkdir -p "$CLAUDE_ACCOUNTS_DIR/work/sessions"
+echo "{\"pid\":$LIVE,\"sessionId\":\"22222222-2222-2222-2222-222222222222\",\"cwd\":\"$T/work\"}" > "$CLAUDE_ACCOUNTS_DIR/work/sessions/$LIVE.json"
+out="$(tty_run "$BIN" refresh)"
+ok "refresh follows the account that has the session open" '[[ "$out" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=You are taking over"* ]] && grep -q "CONFIG=$CLAUDE_ACCOUNTS_DIR/work" "$FAKE_LOG.brief"'
+kill $LIVE 2>/dev/null; rm -f "$CLAUDE_ACCOUNTS_DIR/work/sessions/$LIVE.json"
+
+# save-brief, briefs, --from
+saved="$(printf '# Handoff brief\n## Goal\nFrom-marker goal\n' | "$BIN" save-brief)"
+ok "save-brief stores stdin privately" '[[ -f "$saved" && "$(mode_of "$saved")" == 600 ]] && grep -q From-marker "$saved"'
+ok "save-brief refuses empty input" '! "$BIN" save-brief </dev/null >/dev/null 2>&1'
+ok "briefs lists saved briefs with their goal" '[[ "$("$BIN" briefs)" == *"From-marker goal"* ]]'
+rm -f "$FAKE_LOG.brief"
+out="$(tty_run "$BIN" handoff work --from "$saved")"
+ok "handoff --from seeds a saved brief without regenerating" '[[ "$out" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=You are taking over"* && "$out" == *From-marker* && ! -e "$FAKE_LOG.brief" ]]'
+out="$(tty_run "$BIN" handoff codex --from "$saved")"
+ok "handoff codex --from works" '[[ "$out" == *"CODEX ARGS=You are taking over"* && "$out" == *From-marker* ]]'
+out="$(tty_run "$BIN" refresh --from "$saved")"
+ok "refresh --from restarts on the current account" '[[ "$out" == *"CONFIG=<unset> ARGS=You are taking over"* ]]'
+ok "--from rejects a missing file" '[[ "$(tty_run "$BIN" handoff work --from /nope.md)" == *"not found"* ]]'
+
+# install-command
+"$BIN" install-command >/dev/null
+ok "install-command writes /handoff" '[[ -f "$HOME/.claude/commands/handoff.md" ]] && grep -q "claude-account save-brief" "$HOME/.claude/commands/handoff.md" && grep -q "\$ARGUMENTS" "$HOME/.claude/commands/handoff.md"'
+ok "install-command will not overwrite" '! "$BIN" install-command >/dev/null 2>&1'
+ok "install-command --force overwrites" '"$BIN" install-command --force >/dev/null'
+tty_run "$BIN" use work >/dev/null
+ok "/handoff reaches other accounts via the shared commands dir" '[[ -f "$CLAUDE_ACCOUNTS_DIR/work/commands/handoff.md" ]]'
 
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'
