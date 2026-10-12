@@ -444,7 +444,9 @@ while [[ \$# -gt 0 ]]; do [[ "\$1" == -o ]] && { cp "$BIN" "\$2"; exit 0; }; shi
 F
 chmod +x "$T/fake/curl"
 out="$(PATH="$T/fake:/usr/bin:/bin" "$T/shim/claude-account" --version 2>&1)"
-ok "the claude-account stand-in fetches hatswap once if missing" '[[ "$out" == *"claude-account is now hatswap"* && "$out" == *"hatswap "[0-9]* && -x "$T/shim/hatswap" ]]'
+ok "the stand-in answers --version without installing" '[[ "$out" == *"stand-in"* && ! -e "$T/shim/hatswap" ]]'
+out="$(PATH="$T/fake:/usr/bin:/bin" "$T/shim/claude-account" list 2>&1)"
+ok "the claude-account stand-in fetches hatswap on first use" '[[ "$out" == *"claude-account is now hatswap"* && "$out" == *"main "* && -x "$T/shim/hatswap" ]]'
 rm -f "$T/fake/curl"
 mkdir -p "$T/oldpin/sub"; echo work > "$T/oldpin/.claude-account"
 ok "an old .claude-account pin is still honoured" '[[ "$(cd "$T/oldpin/sub" && bash -c "eval \"\$(\"$BIN\" shell-init bash)\"; claude hi" 2>&1)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* && "$(cd "$T/oldpin" && "$BIN" pin)" == work* ]]'

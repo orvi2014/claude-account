@@ -7,6 +7,12 @@ set -euo pipefail
 here="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")" && pwd)"
 if [[ -x "$here/hatswap" ]]; then exec "$here/hatswap" "$@"; fi
 if command -v hatswap >/dev/null 2>&1; then exec hatswap "$@"; fi
+# Older `claude-account update` checks a download with --version from a temp
+# folder; answer without installing anything there.
+if [[ "${1:-}" == --version || "${1:-}" == -V || "${1:-}" == version ]]; then
+  echo "hatswap (claude-account stand-in; hatswap is installed on first use)"
+  exit 0
+fi
 echo "claude-account is now hatswap. Installing it next to this command..." >&2
 tmp="$(mktemp)"
 curl -fsSL "https://raw.githubusercontent.com/orvi2014/hatswap/main/bin/hatswap" -o "$tmp"
