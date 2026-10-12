@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-12
+
+### Fixed
+- An exported `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
+  `CLAUDE_CODE_OAUTH_TOKEN` overrode the account's own login, so every account
+  silently used that key. They are now cleared, with a one-line note, whenever
+  Claude starts on a named account: `use`, `switch` (including in-place
+  restarts), `handoff`, `refresh`, brief writing, and the shell hook for
+  defaults and pins. Your shell keeps them; `main` is untouched;
+  `CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1` opts out.
+
 ## [0.4.1] - 2026-10-12
 
 ### Fixed
@@ -99,7 +110,8 @@ All notable changes to this project are documented here. The format follows
 - `/handoff` slash command via `install-command`; `save-brief`, `briefs`.
 - Secret redaction in condensed transcripts.
 
-[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/orvi2014/claude-account/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/orvi2014/claude-account/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/orvi2014/claude-account/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/orvi2014/claude-account/compare/v0.2.0...v0.3.0

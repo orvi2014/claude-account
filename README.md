@@ -369,6 +369,7 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 ## Security and privacy
 
 - No credentials are read, copied or modified; sign-in is handled entirely by Claude Code.
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` override a login, so they are cleared (with a one-line note) whenever Claude starts on a named account, including through the shell hook. Your shell keeps them, and `main` is left alone. Set `CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1` to keep them.
 - Before summarisation, labelled passwords, API keys (Anthropic, OpenAI, GitHub, Slack, AWS, Google), JWTs and private keys are replaced with `[redacted]`. Redaction is pattern-based; an unlabelled secret in free text may not be caught.
 - Condensed transcripts are sent only to Claude, through your own Claude Code login.
 - Unless an account is `--private`, `projects/` is shared, so every account can read every conversation. Use private accounts where clients must be kept separate. Settings, `CLAUDE.md`, skills and MCP servers are still shared.
@@ -382,7 +383,7 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 ## Development
 
 ```sh
-bash tests/run.sh                          # 130 tests
+bash tests/run.sh                          # 139 tests
 bash demo/setup.sh && vhs demo/demo.tape   # re-record the demo GIF (requires vhs)
 ```
 

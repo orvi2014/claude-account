@@ -23,6 +23,7 @@ if [ "$1" = "-p" ] || echo "$*" | grep -q -- " -p "; then
   exit 0
 fi
 echo "CONFIG=${CLAUDE_CONFIG_DIR-<unset>} ARGS=$*"
+echo "AUTHKEY=${ANTHROPIC_API_KEY-<unset>} OAUTH=${CLAUDE_CODE_OAUTH_TOKEN-<unset>}"
 F
 cat > "$T/fake/codex" <<'F'
 #!/bin/sh
@@ -97,6 +98,26 @@ ok "whoami shows the main account by default" '[[ "$("$BIN" whoami)" == "main"*"
 ok "whoami follows CLAUDE_CONFIG_DIR" '[[ "$(CLAUDE_CONFIG_DIR="$CLAUDE_ACCOUNTS_DIR/work" "$BIN" whoami | head -1)" == work* ]]'
 ok "--version prints the version" '[[ "$("$BIN" --version)" == "claude-account "[0-9]* ]]'
 ok "remove without input does not crash" '"$BIN" remove work </dev/null >/dev/null 2>&1; [[ -d "$CLAUDE_ACCOUNTS_DIR/work" ]]'
+
+# auth environment variables never override an account's login
+out="$(ANTHROPIC_API_KEY=sk-test CLAUDE_CODE_OAUTH_TOKEN=tok tty_run "$BIN" use work)"
+ok "use clears API key env vars for an account" '[[ "$out" == *"AUTHKEY=<unset> OAUTH=<unset>"* && "$out" == *"ignoring ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN so '"'"'work'"'"' uses its own login"* ]]'
+ok "the key value is never printed" '[[ "$out" != *sk-test* ]]'
+out="$(ANTHROPIC_API_KEY=sk-test CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1 tty_run "$BIN" use work)"
+ok "CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1 keeps them" '[[ "$out" == *"AUTHKEY=sk-test"* && "$out" != *ignoring* ]]'
+ok "main keeps the API key untouched" '[[ "$(ANTHROPIC_API_KEY=sk-test tty_run "$BIN" main)" == *"AUTHKEY=sk-test"* ]]'
+ok "no note when nothing is set" '[[ "$(tty_run "$BIN" use work)" != *ignoring* ]]'
+"$BIN" default work >/dev/null 2>&1
+out="$(ANTHROPIC_API_KEY=sk-test bash -c "eval \"\$(\"$BIN\" shell-init bash)\"; claude hi" 2>&1)"
+ok "shell hook clears the key on a default account" '[[ "$out" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=hi"* && "$out" == *"AUTHKEY=<unset>"* && "$out" == *"ignoring ANTHROPIC_API_KEY"* ]]'
+ok "the shell hook does not unset the key in your shell" '[[ "$(ANTHROPIC_API_KEY=sk-test bash -c "eval \"\$(\"$BIN\" shell-init bash)\"; claude hi >/dev/null 2>&1; echo \$ANTHROPIC_API_KEY")" == sk-test ]]'
+if command -v zsh >/dev/null; then
+  ok "zsh hook clears the key too" '[[ "$(ANTHROPIC_API_KEY=sk-test zsh -fc "eval \"\$(\"$BIN\" shell-init zsh)\"; claude hi" 2>&1)" == *"AUTHKEY=<unset>"* ]]'
+fi
+if command -v fish >/dev/null; then
+  ok "fish hook clears the key too" '[[ "$(ANTHROPIC_API_KEY=sk-test fish -c "\"$BIN\" shell-init fish | source; claude hi" 2>&1)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"*"AUTHKEY=<unset>"* ]]'
+fi
+"$BIN" default main >/dev/null 2>&1
 
 # sessions
 ok "sessions lists newest first" '[[ "$("$BIN" sessions | sed -n 2p)" == *22222222* ]]'
@@ -211,9 +232,10 @@ SID=22222222-2222-2222-2222-222222222222
 sleep 600 & LIVE=$!
 echo "{\"pid\":$LIVE,\"sessionId\":\"$SID\",\"cwd\":\"$T/work\",\"tmux\":\"s:@1.%9\"}" > "$HOME/.claude/sessions/$LIVE.json"
 rm -f "$FAKE_LOG.tmux"
-out="$(FAKE_PANE_PID=$LIVE FAKE_START="claude --session-id $SID --keep-flag x" CLAUDE_CODE_SESSION_ID=$SID "$BIN" switch work 2>&1 </dev/null)"
+out="$(ANTHROPIC_API_KEY=sk-test FAKE_PANE_PID=$LIVE FAKE_START="claude --session-id $SID --keep-flag x" CLAUDE_CODE_SESSION_ID=$SID "$BIN" switch work 2>&1 </dev/null)"
 ok "switch inside tmux restarts the pane in place" '[[ "$out" == *"This tab restarts"* ]] && grep -q "respawn-pane -k -t %9" "$FAKE_LOG.tmux"'
 ok "in-place switch keeps the start flags and resumes on the target" 'grep -q "CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=--resume $SID --keep-flag x" "$FAKE_LOG.tmux"'
+ok "in-place switch clears API key env vars" 'grep -q "AUTHKEY=<unset>" "$FAKE_LOG.tmux"'
 rm -f "$FAKE_LOG.tmux"
 FAKE_PANE_PID=$LIVE FAKE_START="claude --session-id $SID" CLAUDE_CODE_SESSION_ID=$SID "$BIN" switch main </dev/null >/dev/null 2>&1
 ok "in-place switch to main unsets CLAUDE_CONFIG_DIR" 'grep -q "CONFIG=<unset> ARGS=--resume $SID" "$FAKE_LOG.tmux"'

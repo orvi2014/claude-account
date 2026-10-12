@@ -7,7 +7,7 @@
 # with ~/.claude by symlink; only the login and ~/.claude.json are per account.
 set -euo pipefail
 
-VERSION=0.4.1
+VERSION=0.4.2
 BASE="${CLAUDE_ACCOUNTS_DIR:-$HOME/.claude-accounts}"
 MAIN="$HOME/.claude"
 SHARED=(settings.json settings.local.json CLAUDE.md agents skills plugins projects commands hooks)
@@ -15,6 +15,9 @@ CODEX_MAIN="$HOME/.codex"
 CODEX_SHARED=(config.toml AGENTS.md prompts rules skills plugins)
 # Bumped whenever the /handoff or /switch templates change.
 COMMANDS_REV=3
+# Credentials in these variables override an account's own login, so they are
+# cleared whenever Claude starts on a named account.
+AUTH_ENV=(ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN)
 REPO_RAW="https://raw.githubusercontent.com/orvi2014/claude-account/main"
 
 usage() {
@@ -222,7 +225,16 @@ function claude --wraps claude
     end
     if test -n "\$_ca_name"; and test "\$_ca_name" != main
       if test -d "$BASE/\$_ca_name"
-        CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude \$argv
+        set -l _ca_unset
+        if test "\$CLAUDE_ACCOUNT_KEEP_AUTH_ENV" != 1
+          for v in ${AUTH_ENV[*]}
+            if set -q \$v; and test -n "\$\$v"
+              echo "claude-account: ignoring \$v so '\$_ca_name' uses its own login (CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1 keeps it)" >&2
+            end
+            set -a _ca_unset -u \$v
+          end
+        end
+        env \$_ca_unset CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" (command -s claude) \$argv
         return
       end
       echo "claude-account: no account '\$_ca_name'; starting on main" >&2
@@ -254,7 +266,16 @@ claude() {
     fi
     if [ -n "\$_ca_name" ] && [ "\$_ca_name" != main ]; then
       if [ -d "$BASE/\$_ca_name" ]; then
-        CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude "\$@"
+        if [ "\${CLAUDE_ACCOUNT_KEEP_AUTH_ENV-}" != 1 ]; then
+          for _ca_l in ${AUTH_ENV[*]}; do
+            if [ -n "\$(printenv "\$_ca_l")" ]; then
+              echo "claude-account: ignoring \$_ca_l so '\$_ca_name' uses its own login (CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1 keeps it)" >&2
+            fi
+          done
+          (unset ${AUTH_ENV[*]}; CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude "\$@")
+        else
+          CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude "\$@"
+        fi
         return
       fi
       echo "claude-account: no account '\$_ca_name'; starting on main" >&2
@@ -317,7 +338,8 @@ switch_in_pane() {
     start="$(tmux display -p -t "$pane" '#{pane_start_command}')"
     if [[ "$start" == *"--session-id $sid"* ]]; then
       cmd="${start/--session-id $sid/--resume $sid}"
-      if [[ "$dir" == "$MAIN" ]]; then cmd="env -u CLAUDE_CONFIG_DIR $cmd"; else cmd="env CLAUDE_CONFIG_DIR=$(printf %q "$dir") $cmd"; fi
+      local e=() a; while IFS= read -r a; do e+=("$(printf %q "$a")"); done < <(account_env "$dir")
+      cmd="env ${e[*]} $cmd"
     else
       cmd="$(printf %q "$self") $(account_label "$dir") --resume $sid"
     fi
@@ -556,6 +578,27 @@ warn_stale_commands() {
   return 0
 }
 
+# auth_env_unset <account label>: print "-u VAR" args for env(1), and say so
+# once on stderr, unless CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1.
+auth_env_unset() {
+  [[ "${CLAUDE_ACCOUNT_KEEP_AUTH_ENV:-}" == 1 ]] && return 0
+  local v set=()
+  for v in "${AUTH_ENV[@]}"; do
+    [[ -n "${!v:-}" ]] && set+=("$v")
+    printf -- '-u\n%s\n' "$v"
+  done
+  [[ ${#set[@]} -gt 0 ]] && echo "claude-account: ignoring ${set[*]} so '$1' uses its own login (CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1 keeps it)" >&2
+  return 0
+}
+
+# account_env <config dir>: env(1) arguments that start Claude on that account.
+account_env() {
+  local dir="$1" a
+  if [[ "$dir" == "$MAIN" ]]; then printf -- '-u\nCLAUDE_CONFIG_DIR\n'; return; fi
+  while IFS= read -r a; do printf '%s\n' "$a"; done < <(auth_env_unset "$(account_label "$dir")")
+  printf 'CLAUDE_CONFIG_DIR=%s\n' "$dir"
+}
+
 need_tty() {
   [[ -t 0 && -t 1 ]] && return 0
   echo "This opens an interactive Claude session; run it in a normal terminal tab (not with ! inside Claude)." >&2
@@ -566,21 +609,16 @@ need_tty() {
 # CLAUDE_CONFIG_DIR unset (its config is ~/.claude.json, outside ~/.claude).
 claude_as() {
   local dir="$1"; shift
-  if [[ "$dir" == "$MAIN" ]]; then
-    env -u CLAUDE_CONFIG_DIR claude "$@"
-  else
-    CLAUDE_CONFIG_DIR="$dir" claude "$@"
-  fi
+  local e=(); while IFS= read -r a; do e+=("$a"); done < <(account_env "$dir")
+  env "${e[@]}" claude "$@"
 }
 
 run() {
   local dir="$1"; shift
   [[ "$dir" == "$MAIN" ]] || link_shared "$dir"
   need_tty
-  if [[ "$dir" == "$MAIN" ]]; then
-    exec env -u CLAUDE_CONFIG_DIR claude "$@"
-  fi
-  CLAUDE_CONFIG_DIR="$dir" exec claude "$@"
+  local e=(); while IFS= read -r a; do e+=("$a"); done < <(account_env "$dir")
+  exec env "${e[@]}" claude "$@"
 }
 
 config_dir_of() {
