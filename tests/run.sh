@@ -26,6 +26,7 @@ echo "CONFIG=${CLAUDE_CONFIG_DIR-<unset>} ARGS=$*"
 F
 cat > "$T/fake/codex" <<'F'
 #!/bin/sh
+echo "CODEX_HOME=${CODEX_HOME-<unset>}"
 echo "CODEX ARGS=$*"
 F
 cat > "$T/fake/gh" <<'F'
@@ -262,10 +263,110 @@ ok "--from rejects a missing file" '[[ "$(tty_run "$BIN" handoff work --from /no
 "$BIN" install-command >/dev/null
 ok "install-command writes /switch" 'grep -q "claude-account switch \$ARGUMENTS" "$HOME/.claude/commands/switch.md"'
 ok "install-command writes /handoff" '[[ -f "$HOME/.claude/commands/handoff.md" ]] && grep -q "## Tried and rejected" "$HOME/.claude/commands/handoff.md" && grep -q "claude-account save-brief" "$HOME/.claude/commands/handoff.md" && grep -q "\$ARGUMENTS" "$HOME/.claude/commands/handoff.md"'
-ok "install-command will not overwrite" '! "$BIN" install-command >/dev/null 2>&1'
+ok "install-command updates its own files" '"$BIN" install-command >/dev/null 2>&1'
+ok "installed commands carry the template revision" 'grep -q "claude-account-commands:" "$HOME/.claude/commands/switch.md"'
+sed -i.bak "/claude-account-commands:/d" "$HOME/.claude/commands/handoff.md"
+ok "outdated commands are reported" '[[ "$("$BIN" list 2>&1)" == *"commands are out of date (/handoff)"* ]]'
+"$BIN" install-command >/dev/null
+ok "install-command clears the outdated note" '[[ "$("$BIN" list 2>&1)" != *"out of date"* ]]'
+cp "$HOME/.claude/commands/switch.md" "$T/switch.keep"; echo "my own command" > "$HOME/.claude/commands/switch.md"
+ok "install-command will not overwrite a foreign file" '! "$BIN" install-command >/dev/null 2>&1 && grep -q "my own command" "$HOME/.claude/commands/switch.md"'
+cp "$T/switch.keep" "$HOME/.claude/commands/switch.md"
 ok "install-command --force overwrites" '"$BIN" install-command --force >/dev/null'
 tty_run "$BIN" use work >/dev/null
 ok "/handoff reaches other accounts via the shared commands dir" '[[ -f "$CLAUDE_ACCOUNTS_DIR/work/commands/handoff.md" ]]'
+
+# private history
+"$BIN" add client --private >/dev/null 2>&1
+ok "add --private gives the account its own history" '[[ -d "$CLAUDE_ACCOUNTS_DIR/client/projects" && ! -L "$CLAUDE_ACCOUNTS_DIR/client/projects" && -e "$CLAUDE_ACCOUNTS_DIR/client/.private" && -L "$CLAUDE_ACCOUNTS_DIR/client/settings.json" ]]'
+ok "list marks private accounts" '[[ "$("$BIN" list 2>/dev/null | grep ^client)" == *"[private]"* ]]'
+tty_run "$BIN" use client >/dev/null
+ok "use keeps a private account private" '[[ ! -L "$CLAUDE_ACCOUNTS_DIR/client/projects" ]]'
+CPROJ="$CLAUDE_ACCOUNTS_DIR/client/projects/$(basename "$PROJ")"
+mkdir -p "$CPROJ"
+python3 - "$CPROJ/33333333-3333-3333-3333-333333333333.jsonl" <<'P'
+import json, sys
+open(sys.argv[1], "w").write(json.dumps({"type": "user", "uuid": "c1", "parentUuid": None, "message": {"content": "private client task"}}) + "\n")
+P
+ok "sessions include private conversations" '[[ "$("$BIN" sessions)" == *"private client task"* ]]'
+ok "private conversations stay out of the shared history" '[[ ! -e "$PROJ/33333333-3333-3333-3333-333333333333.jsonl" ]]'
+out="$(tty_run "$BIN" handoff work 33333333-3333-3333-3333-333333333333)"
+ok "handing off a private conversation copies it to the target" '[[ "$out" == *"Copied this conversation"* && "$out" == *"ARGS=--resume 33333333"* && -e "$PROJ/33333333-3333-3333-3333-333333333333.jsonl" ]]'
+ok "brief reads private conversations" '"$BIN" brief --no-repo 33333333-3333-3333-3333-333333333333 >/dev/null 2>&1 && grep -q "private client task" "$FAKE_LOG.stdin"'
+ok "private --off refuses while it has history" '! "$BIN" private client --off >/dev/null 2>&1'
+"$BIN" add spare >/dev/null 2>&1; "$BIN" private spare >/dev/null
+ok "private converts an existing account" '[[ -e "$CLAUDE_ACCOUNTS_DIR/spare/.private" && ! -L "$CLAUDE_ACCOUNTS_DIR/spare/projects" ]]'
+"$BIN" private spare --off >/dev/null
+ok "private --off shares history again" '[[ -L "$CLAUDE_ACCOUNTS_DIR/spare/projects" && ! -e "$CLAUDE_ACCOUNTS_DIR/spare/.private" ]]'
+
+# codex accounts
+mkdir -p "$HOME/.codex"; echo 'model = "x"' > "$HOME/.codex/config.toml"
+out="$("$BIN" codex-login work 2>&1)"
+ok "codex-login uses the account's own CODEX_HOME" '[[ "$out" == *"CODEX_HOME=$CLAUDE_ACCOUNTS_DIR/work/codex"* && "$out" == *"ARGS=login"* ]]'
+ok "codex homes share config, not logins" '[[ -L "$CLAUDE_ACCOUNTS_DIR/work/codex/config.toml" && ! -e "$CLAUDE_ACCOUNTS_DIR/work/codex/auth.json" ]]'
+python3 - "$CLAUDE_ACCOUNTS_DIR/work/codex/auth.json" <<'P'
+import base64, json, sys
+b = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+tok = b({"alg": "none"}) + "." + b({"email": "work@openai.example"}) + ".sig"
+json.dump({"tokens": {"id_token": tok, "access_token": "secret-access", "refresh_token": "secret-refresh"}}, open(sys.argv[1], "w"))
+P
+ok "list shows the Codex login" '[[ "$("$BIN" list 2>/dev/null | grep ^work)" == *"codex: work@openai.example"* ]] && ! "$BIN" list 2>/dev/null | grep -q secret-'
+ok "codex <account> runs on its login" '[[ "$(tty_run "$BIN" codex work --help)" == *"CODEX_HOME=$CLAUDE_ACCOUNTS_DIR/work/codex"* ]]'
+ok "codex main leaves CODEX_HOME unset" '[[ "$(tty_run "$BIN" codex main)" == *"CODEX_HOME=<unset>"* ]]'
+ok "codex refuses an account without a Codex login" '! "$BIN" codex client >/dev/null 2>&1'
+out="$(CLAUDE_CONFIG_DIR="$CLAUDE_ACCOUNTS_DIR/work" tty_run "$BIN" handoff codex 22222222-2222-2222-2222-222222222222)"
+ok "handoff codex uses the session account's Codex login" '[[ "$out" == *"Codex account: work (work@openai.example)"* && "$out" == *"CODEX_HOME=$CLAUDE_ACCOUNTS_DIR/work/codex"* ]]'
+out="$(tty_run "$BIN" handoff codex --as work)"
+ok "handoff codex --as picks the Codex account" '[[ "$out" == *"CODEX_HOME=$CLAUDE_ACCOUNTS_DIR/work/codex"* ]]'
+out="$(tty_run "$BIN" handoff codex)"
+ok "handoff codex falls back to ~/.codex" '[[ "$out" == *"CODEX_HOME=<unset>"* ]]'
+ok "handoff codex --as rejects accounts without Codex" '[[ "$(tty_run "$BIN" handoff codex --as client)" == *"no Codex login"* ]]'
+
+# switch in Terminal.app / iTerm2 (macOS)
+if [[ "$(uname)" == Darwin ]]; then
+  mkdir -p "$T/term"
+  cat > "$T/term/ps" <<'F'
+#!/bin/bash
+for a in "$@"; do [[ "$a" == tty= ]] && { echo ttys009; exit 0; }; done
+exec /bin/ps "$@"
+F
+  cat > "$T/term/osascript" <<'F'
+#!/bin/bash
+echo "OSA $3 $4 ${5-}" >> "$FAKE_LOG.osa"
+echo ok
+F
+  chmod +x "$T/term/ps" "$T/term/osascript"
+  sleep 600 & LIVE=$!
+  echo "{\"pid\":$LIVE,\"sessionId\":\"$SID\",\"cwd\":\"$T/work\"}" > "$HOME/.claude/sessions/$LIVE.json"
+  rm -f "$FAKE_LOG.osa"
+  out="$(PATH="$T/term:$PATH" CLAUDE_ACCOUNT_SWITCH_DELAY=0 CLAUDE_CODE_SESSION_ID=$SID "$BIN" switch work 2>&1 </dev/null)"
+  for i in $(seq 1 50); do grep -q " type " "$FAKE_LOG.osa" 2>/dev/null && break; sleep 0.1; done
+  ok "switch in a Terminal/iTerm tab restarts that tab" '[[ "$out" == *"This tab restarts"* ]] && grep -q "OSA /dev/ttys009 type .*work --resume $SID" "$FAKE_LOG.osa"'
+  ok "terminal switch stops the old session" '! kill -0 $LIVE 2>/dev/null'
+  kill $LIVE 2>/dev/null; rm -f "$HOME/.claude/sessions/$LIVE.json"
+fi
+
+# installer
+mkdir -p "$T/ihome"
+out="$(HOME="$T/ihome" SHELL=/bin/zsh ZDOTDIR= PATH="$T/fake:/usr/bin:/bin" CLAUDE_ACCOUNT_SOURCE="$BIN" bash "$ROOT/install.sh" 2>&1)"
+ok "install.sh installs the script" '[[ -x "$T/ihome/.local/bin/claude-account" && "$out" == *"Installed claude-account "* ]]'
+ok "install.sh adds PATH and the default-account hook" 'grep -q "claude-account PATH" "$T/ihome/.zshrc" && grep -q ">>> claude-account >>>" "$T/ihome/.zshrc"'
+ok "install.sh installs /handoff and /switch" '[[ -f "$T/ihome/.claude/commands/handoff.md" && -f "$T/ihome/.claude/commands/switch.md" ]]'
+HOME="$T/ihome" SHELL=/bin/zsh PATH="$T/fake:/usr/bin:/bin" CLAUDE_ACCOUNT_SOURCE="$BIN" bash "$ROOT/install.sh" >/dev/null 2>&1
+ok "install.sh is idempotent" '[[ "$(grep -c "claude-account PATH" "$T/ihome/.zshrc")" == 1 && "$(grep -c ">>> claude-account >>>" "$T/ihome/.zshrc")" == 1 ]]'
+out="$(HOME="$T/ihome" SHELL=/bin/zsh CLAUDE_ACCOUNT_SOURCE="$BIN" bash "$ROOT/install.sh" --no-shell --no-commands --bin-dir "$T/ib" 2>&1)"
+ok "install.sh --bin-dir --no-shell installs only the script" '[[ -x "$T/ib/claude-account" && "$out" == *"not on your PATH"* ]]'
+
+# update (non-clone install, download stubbed)
+cat > "$T/fake/curl" <<F
+#!/bin/bash
+while [[ \$# -gt 0 ]]; do [[ "\$1" == -o ]] && { cp "$BIN" "\$2"; exit 0; }; shift; done
+F
+chmod +x "$T/fake/curl"
+mkdir -p "$T/ub"; sed 's/^VERSION=.*/VERSION=0.0.1/' "$BIN" > "$T/ub/claude-account"; chmod +x "$T/ub/claude-account"
+out="$("$T/ub/claude-account" update 2>&1)"
+ok "update replaces the script with the latest" '[[ "$out" == *"Updated: claude-account 0.0.1 -> "* ]] && cmp -s "$BIN" "$T/ub/claude-account"'
+rm -f "$T/fake/curl"
 
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'

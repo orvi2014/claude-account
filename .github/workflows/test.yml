@@ -8,5 +8,5 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n bin/claude-account
+      - run: bash -n bin/claude-account && bash -n install.sh
       - run: bash tests/run.sh

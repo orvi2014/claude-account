@@ -38,8 +38,11 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 
 - **Concurrent accounts.** Every account stays signed in; run two accounts in two terminals at once.
 - **Shared environment.** Settings, agents, skills, plugins, hooks, memory and conversation history are shared across accounts. Only the login differs.
-- **Switch in place.** `switch` moves the current conversation to another account. In tmux, including desktop apps that host tabs in tmux, the same tab restarts on the new login with its history and flags intact.
+- **Switch in place.** `switch` moves the current conversation to another account. In tmux (including desktop apps that host tabs in tmux), Terminal.app and iTerm2, the same tab restarts on the new login with its history intact.
 - **Default account.** `default` (or `--default`) picks the account plain `claude` starts on; `setup-shell` installs the one-line hook for zsh, bash or fish.
+- **Codex per account.** Each account can have its own Codex login; `handoff codex` uses the one that belongs to the session's account.
+- **Private history.** Accounts can keep their conversations and memory to themselves, for client work that must stay separate.
+- **One-line install and `update`.** The installer sets up `PATH`, the shell hook and the slash commands; outdated slash commands are flagged.
 - **Session handoff.** Continue a conversation on another account with `--resume`, or fork a copy of it.
 - **Brief handoff.** Start a fresh session from a structured summary instead of replaying the full history.
 - **Refresh.** Restart a session that has grown too long, on the same account, from its brief.
@@ -65,18 +68,33 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 ### 1. Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/orvi2014/claude-account/main/install.sh | bash
+```
+
+This installs `claude-account` to `~/.local/bin`, adds that folder to your `PATH` if needed, installs the default-account shell hook and the `/handoff` and `/switch` commands. Open a new terminal afterwards. Every change is marked and reversible (see [Uninstall](#uninstall)).
+
+Options go after `bash -s --`, for example `curl -fsSL …/install.sh | bash -s -- --no-shell`:
+
+| Option | Effect |
+|---|---|
+| `--no-shell` | Do not edit shell startup files (no `PATH` line, no default-account hook). |
+| `--no-commands` | Do not install `/handoff` and `/switch`. |
+| `--bin-dir <dir>` | Install somewhere other than `~/.local/bin`. |
+
+Update later with `claude-account update`. It also refreshes the slash commands.
+
+<details>
+<summary>Install by hand</summary>
+
+```sh
 mkdir -p ~/.local/bin
 curl -fsSL https://raw.githubusercontent.com/orvi2014/claude-account/main/bin/claude-account \
   -o ~/.local/bin/claude-account
 chmod +x ~/.local/bin/claude-account
 ```
 
-If `~/.local/bin` is not on your `PATH`, add it to your shell profile:
-
-```sh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
-exec "$SHELL"
-```
+If `~/.local/bin` is not on your `PATH`, add it to your shell profile.
+</details>
 
 <details>
 <summary>Install from a clone instead</summary>
@@ -86,7 +104,7 @@ git clone https://github.com/orvi2014/claude-account.git
 ln -s "$PWD/claude-account/bin/claude-account" ~/.local/bin/claude-account
 ```
 
-`git pull` in the clone then updates the command.
+`git pull` in the clone (or `claude-account update`) then updates the command.
 </details>
 
 ### 2. Verify
@@ -132,10 +150,12 @@ This adds `~/.claude/commands/handoff.md` and `switch.md`, which every account s
 
 ```sh
 claude-account setup-shell --remove # if you added the shell hook
-claude-account remove work          # repeat for each added account
+claude-account remove work          # repeat for each added account (also signs out its Codex login)
 rm -f ~/.local/bin/claude-account ~/.claude/commands/handoff.md ~/.claude/commands/switch.md
 rm -r ~/.claude-accounts            # saved briefs
 ```
+
+The installer's `PATH` line is marked `# claude-account PATH` in your shell profile; delete that line too.
 
 ## Usage
 
@@ -157,7 +177,15 @@ Inside Claude Code:
 ! claude-account switch work --default  # also make "work" the default for new sessions
 ```
 
-A running Claude Code process cannot change its login, so `switch` restarts it: the same conversation (full history, same ID) resumes on the other account. When the session runs in tmux — including desktop apps that host each tab in tmux — the **same tab** restarts in place, keeping its original flags, hooks and MCP config. Otherwise type `/exit` and run `claude-account switch work` in that terminal; from a different terminal, `switch` closes the session where it is open and resumes it there.
+A running Claude Code process cannot change its login, so `switch` restarts it: the same conversation (full history, same ID) resumes on the other account, in the **same tab**:
+
+| Where the session runs | What happens |
+|---|---|
+| tmux, including desktop apps that host each tab in tmux | The pane restarts in place, keeping its original flags, hooks and MCP config. |
+| Terminal.app or iTerm2 (macOS) | Claude exits and the resume command is typed into that tab. macOS asks once to let your terminal control Terminal/iTerm2. |
+| Anything else | Type `/exit`, then run `claude-account switch work` in that terminal. |
+
+Run from a different terminal, `switch` restarts the session in its own tab when it can, and otherwise closes it there and resumes it in the terminal you ran it from.
 
 **Choose the default account**
 
@@ -199,6 +227,27 @@ Claude writes the brief from its own context, saves it, and prints the command t
 claude-account handoff codex
 ```
 
+**Give each account its own Codex login**
+
+```sh
+claude-account codex-login acme      # sign "acme" in to its Codex (ChatGPT/OpenAI) account
+claude-account codex acme            # start Codex on acme's login
+claude-account handoff codex         # uses the session's account's Codex login when it has one
+claude-account handoff codex --as acme
+```
+
+Each account's Codex login lives in its own `CODEX_HOME` (`~/.claude-accounts/<name>/codex`). `config.toml`, `AGENTS.md`, prompts, rules, skills and plugins are shared with `~/.codex`; the login, history and sessions are not. `main` uses `~/.codex`. `add acme --codex` signs in to both at once, and `list` shows each account's Codex email.
+
+**Keep a client's conversations to its own account**
+
+```sh
+claude-account add acme --private    # new account with its own history and memory
+claude-account private acme          # or convert an existing one
+claude-account private acme --off    # share history again (only while its own history is empty)
+```
+
+By default every account shares conversation history. A private account keeps its conversations and memory in its own `projects/` folder, so other accounts never read them; settings, skills and MCP servers are still shared. `sessions`, `brief` and `handoff` see private conversations too. When you deliberately hand one to another account, it is copied into that account's history and the command says so.
+
 **Work with saved briefs**
 
 ```sh
@@ -211,10 +260,13 @@ claude-account brief --edit                    # write, review and print a brief
 
 | Command | Description |
 |---|---|
-| `add <name> [--email <addr>] [--console]` | Create an account profile and sign in. |
+| `add <name> [--email <addr>] [--console] [--private] [--codex]` | Create an account profile and sign in. `--private` keeps its history to itself; `--codex` also signs it in to Codex. |
+| `private <name> [--off]` | Give an existing account its own history and memory, or share again. |
+| `codex-login <name\|main>` | Sign an account in to its own Codex login. |
+| `codex <name\|main> [codex args…]` | Start Codex on that account's Codex login. |
 | `use <name> [--default] [claude args…]` | Start Claude Code on an account. `claude-account <name>` is equivalent. `--default` also makes it the default. |
 | `main [claude args…]` | Start Claude Code on the main account (`~/.claude`). |
-| `switch <target> [id] [--default] [--yes]` | Close a conversation where it is open and resume it here on another account. |
+| `switch <target> [id] [--default] [--yes]` | Continue a conversation on another account, restarting it in its own tab (tmux, Terminal.app, iTerm2) or resuming it here. |
 | `default [name\|main]` | Show or set the account plain `claude` starts on. |
 | `setup-shell [--remove] [--shell zsh\|bash\|fish]` | Install or remove the hook that makes plain `claude` follow the default. |
 | `shell-init [zsh\|bash\|fish]` | Print that hook. |
@@ -225,11 +277,12 @@ claude-account brief --edit                    # write, review and print a brief
 | `remove <name>` | Sign out and delete a profile; shared files are kept. |
 | `sessions [n]` | Recent conversations in the current folder and where each is open. |
 | `handoff <target> [id] [--fork]` | Resume a conversation on another account. |
-| `handoff <target\|codex> [id] --brief` | Start a fresh session there from a brief. |
+| `handoff <target\|codex> [id] --brief [--as <name>]` | Start a fresh session there from a brief. For Codex, `--as` picks whose Codex login to use. |
 | `refresh [id]` | Brief and fresh session on the same account. |
 | `brief [id]` | Write and print a brief without switching. |
 | `briefs [n]` | List saved briefs. |
-| `install-command [--force]` | Install the `/handoff` and `/switch` commands for Claude Code. |
+| `install-command [--force]` | Install or update the `/handoff` and `/switch` commands. `--force` also replaces files it did not write. |
+| `update` | Update claude-account (a clone is updated with `git pull`) and its slash commands. |
 
 `<target>` is an account name or `main`. Without an `id`, the most recent conversation in the current folder is used; IDs are listed by `sessions`.
 
@@ -242,7 +295,9 @@ claude-account brief --edit                    # write, review and print a brief
 | `--model <name>` | Model that writes the brief (default `sonnet`). |
 | `--no-repo` | Leave out repository state. |
 
-Commands that start Claude Code need a terminal; they will not run through Claude Code's `!` prefix.
+Commands that start Claude Code need a terminal; they will not run through Claude Code's `!` prefix. `switch` is the exception.
+
+When the installed `/handoff` or `/switch` is older than the current templates, `list`, `whoami` and the handoff commands print a one-line note to run `claude-account install-command`.
 
 ## Handoff modes
 
@@ -294,6 +349,8 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 - **Sharing.** `settings.json`, `settings.local.json`, `CLAUDE.md`, `agents/`, `skills/`, `plugins/`, `commands/`, `hooks/` and `projects/` are symlinked from `~/.claude`. User-scope MCP servers are copied once when an account is added.
 - **Session discovery.** Conversations are read from the shared `projects/` directory. Open sessions are detected from each account's session registry and confirmed by process ID.
 - **Switching.** A running Claude Code process cannot change its login, so `switch` restarts it with `--resume` under the other account. If the session's registry entry names a tmux pane, the restart is scheduled through the tmux server (`respawn-pane`), so it works from inside the session and keeps the pane's original start command. Otherwise the session is asked to exit (`SIGTERM`) and resumed in the terminal that ran `switch`.
+- **Private history.** A private account has a real `projects/` folder instead of the shared symlink, and a `.private` marker so it is never re-linked. Session discovery scans every distinct history folder.
+- **Codex.** Codex reads its login from `$CODEX_HOME`; each account gets `~/.claude-accounts/<name>/codex`, with configuration symlinked from `~/.codex`. The Codex email shown by `list` is read from the login's ID-token claims; tokens are never printed or copied.
 - **Default account.** The default is a name in `~/.claude-accounts/.default`. The shell hook defines a `claude` function that reads it on every call and sets `CLAUDE_CONFIG_DIR` only when it is not already set.
 
 ## Security and privacy
@@ -301,7 +358,7 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 - No credentials are read, copied or modified; sign-in is handled entirely by Claude Code.
 - Before summarisation, labelled passwords, API keys (Anthropic, OpenAI, GitHub, Slack, AWS, Google), JWTs and private keys are replaced with `[redacted]`. Redaction is pattern-based; an unlabelled secret in free text may not be caught.
 - Condensed transcripts are sent only to Claude, through your own Claude Code login.
-- Because `projects/` is shared, every account can read every conversation. Do not use this layout where accounts must be kept strictly separate.
+- Unless an account is `--private`, `projects/` is shared, so every account can read every conversation. Use private accounts where clients must be kept separate. Settings, `CLAUDE.md`, skills and MCP servers are still shared.
 
 ## Limitations
 
@@ -312,11 +369,11 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 ## Development
 
 ```sh
-bash tests/run.sh                          # 81 tests
+bash tests/run.sh                          # 113 tests
 bash demo/setup.sh && vhs demo/demo.tape   # re-record the demo GIF (requires vhs)
 ```
 
-The test suite is self-contained: a temporary `HOME`, stand-in `claude`, `codex`, `gh`, `tmux` and editor executables, and synthetic session files. It never touches your real configuration or credentials. CI runs it on Ubuntu and macOS.
+The test suite is self-contained: a temporary `HOME`, stand-in `claude`, `codex`, `gh`, `tmux`, `osascript`, `curl` and editor executables, and synthetic session files. It never touches your real configuration or credentials. CI runs it on Ubuntu and macOS.
 
 Issues and pull requests are welcome.
 

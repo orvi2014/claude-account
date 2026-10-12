@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
+### Added
+- Codex per account: `codex-login <name>`, `codex <name>`, `add --codex`.
+  Each account gets its own `CODEX_HOME` with shared configuration;
+  `handoff codex` uses the session's account's Codex login (or `--as <name>`),
+  and `list` shows each Codex email.
+- Private history: `add --private` and `private <name> [--off]`. A private
+  account keeps its conversations and memory to itself; handing one off
+  deliberately copies it to the target and says so.
+- `switch` restarts the session in its own tab in Terminal.app and iTerm2
+  (macOS), not only in tmux.
+- One-line installer (`install.sh`): installs the script, adds `PATH`, the
+  default-account hook and the slash commands; `--no-shell`, `--no-commands`,
+  `--bin-dir`.
+- `update`: updates the script (or `git pull` for a clone) and the slash
+  commands.
+- Outdated `/handoff` and `/switch` are detected and flagged; `install-command`
+  now updates its own files without `--force`.
+
+### Fixed
+- A conversation that existed in two histories was listed twice and broke
+  `brief`/`handoff` for it.
+- The second confirmation prompt in `switch` no longer appears after the
+  first was answered, and no longer crashes without input.
+
 ## [0.2.0] - 2026-10-12
 
 ### Added
@@ -46,6 +72,7 @@ All notable changes to this project are documented here. The format follows
 - `/handoff` slash command via `install-command`; `save-brief`, `briefs`.
 - Secret redaction in condensed transcripts.
 
-[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/orvi2014/claude-account/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/orvi2014/claude-account/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/orvi2014/claude-account/releases/tag/v0.1.0
