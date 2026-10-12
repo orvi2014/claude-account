@@ -152,6 +152,39 @@ if command -v fish >/dev/null; then
   "$BIN" default main >/dev/null 2>&1
 fi
 
+# per-folder pin
+mkdir -p "$T/work/sub/deeper"
+hook_claude() { (cd "$1" && bash -c "eval \"\$(\"$BIN\" shell-init bash)\"; claude hi" 2>&1); }
+out="$(cd "$T/work" && "$BIN" pin work 2>&1)"
+ok "pin writes .claude-account" '[[ "$out" == *"Pinned"* ]] && grep -qx work "$T/work/.claude-account"'
+ok "pin keeps the file out of git" 'grep -qx ".claude-account" "$T/work/.git/info/exclude" && [[ -z "$(cd "$T/work" && git status --short .claude-account)" ]]'
+(cd "$T/work" && "$BIN" pin work >/dev/null 2>&1)
+ok "pin adds the ignore line once" '[[ "$(grep -c "^.claude-account$" "$T/work/.git/info/exclude")" == 1 ]]'
+ok "hook uses the pin in that folder" '[[ "$(hook_claude "$T/work")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=hi"* ]]'
+ok "hook uses the pin in subfolders" '[[ "$(hook_claude "$T/work/sub/deeper")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
+ok "hook ignores the pin outside the folder" '[[ "$(hook_claude "$T")" == *"CONFIG=<unset>"* ]]'
+ok "explicit CLAUDE_CONFIG_DIR beats the pin" '[[ "$(cd "$T/work" && CLAUDE_CONFIG_DIR=/x bash -c "eval \"\$(\"$BIN\" shell-init bash)\"; claude hi")" == *"CONFIG=/x"* ]]'
+"$BIN" default work >/dev/null 2>&1
+(cd "$T/work/sub" && "$BIN" pin main >/dev/null 2>&1)
+ok "a nearer pin wins, and main overrides the default" '[[ "$(hook_claude "$T/work/sub/deeper")" == *"CONFIG=<unset>"* ]]'
+ok "outside any pin the default still applies" '[[ "$(hook_claude "$T")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
+"$BIN" default main >/dev/null 2>&1
+ok "pin shows the nearest pin" '[[ "$(cd "$T/work/sub/deeper" && "$BIN" pin)" == "main  (pinned by "*"/work/sub/.claude-account)" ]]'
+SHELL=/bin/zsh "$BIN" setup-shell --shell zsh >/dev/null
+ok "whoami reports the pin" '[[ "$(cd "$T/work" && SHELL=/bin/zsh "$BIN" whoami 2>/dev/null)" == *"new '"'"'claude'"'"' sessions here: work (pinned by "* ]]'
+ok "whoami flags a pin the shell hook cannot apply" '"$BIN" setup-shell --shell zsh --remove >/dev/null; [[ "$(cd "$T/work" && SHELL=/bin/zsh "$BIN" whoami 2>/dev/null)" == *"should be '"'"'work'"'"', pinned by"*"hook is missing"* ]]'
+out="$(cd "$T/work" && tty_run "$BIN" refresh)"
+ok "refresh in a pinned folder uses the pinned account" '[[ "$out" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=You are taking over"* ]]'
+printf '# note\n\n  nope  \n' > "$T/work/sub/.claude-account"
+ok "a pin naming an unknown account falls back to main with a warning" '[[ "$(hook_claude "$T/work/sub")" == *"no account '"'"'nope'"'"'"*"CONFIG=<unset>"* ]]'
+ok "pin rejects unknown accounts" '! (cd "$T/work" && "$BIN" pin nope >/dev/null 2>&1)'
+(cd "$T/work/sub" && "$BIN" pin --clear >/dev/null 2>&1)
+ok "pin --clear removes the pin" '[[ ! -e "$T/work/sub/.claude-account" ]]'
+if command -v fish >/dev/null; then
+  ok "fish hook follows the pin" '[[ "$(cd "$T/work/sub/deeper" && fish -c "\"$BIN\" shell-init fish | source; claude hi")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
+fi
+rm -f "$T/work/.claude-account"
+
 # switch
 ok "switch resumes a closed session on the target" '[[ "$(tty_run "$BIN" switch work)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=--resume 22222222"* ]]'
 ok "switch refuses codex" '! "$BIN" switch codex >/dev/null 2>&1'

@@ -40,6 +40,7 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 - **Shared environment.** Settings, agents, skills, plugins, hooks, memory and conversation history are shared across accounts. Only the login differs.
 - **Switch in place.** `switch` moves the current conversation to another account. In tmux (including desktop apps that host tabs in tmux), Terminal.app and iTerm2, the same tab restarts on the new login with its history intact.
 - **Default account.** `default` (or `--default`) picks the account plain `claude` starts on; `setup-shell` installs the one-line hook for zsh, bash or fish.
+- **Per-folder accounts.** `pin acme` in a client's folder and every `claude` started there uses that client's account.
 - **Codex per account.** Each account can have its own Codex login; `handoff codex` uses the one that belongs to the session's account.
 - **Private history.** Accounts can keep their conversations and memory to themselves, for client work that must stay separate.
 - **One-line install and `update`.** The installer sets up `PATH`, the shell hook and the slash commands; outdated slash commands are flagged.
@@ -198,6 +199,17 @@ claude-account default              # show the current default
 
 The first time you set a default, `claude-account` offers to add a one-line hook to your shell's startup file (`~/.zshrc`, `~/.bash_profile` / `~/.bashrc`, or fish `conf.d`) so plain `claude` follows it. The hook reads the default on every call, so changing it later needs no reload. An explicit `CLAUDE_CONFIG_DIR` always wins.
 
+**Pin a folder to an account**
+
+```sh
+cd ~/clients/acme && claude-account pin acme   # plain `claude` here, and in every subfolder, starts on "acme"
+claude-account pin                             # show which pin applies here
+claude-account pin main                        # this folder uses main, whatever the default
+claude-account pin --clear                     # remove this folder's pin
+```
+
+`pin` writes a one-line `.claude-account` file. Inside a git repository it is added to the repository's local ignore (`.git/info/exclude`), so it is never committed. The nearest pin wins, so a subfolder can pin a different account. Order of precedence for a plain `claude`: an explicit `CLAUDE_CONFIG_DIR`, then the nearest pin, then the default account, then `main`. `whoami` shows which one applies and why, and `refresh` and `handoff codex` follow it too. Pins work through the same shell hook as the default.
+
 **Move a task to another account**
 
 ```sh
@@ -268,6 +280,7 @@ claude-account brief --edit                    # write, review and print a brief
 | `main [claude args…]` | Start Claude Code on the main account (`~/.claude`). |
 | `switch <target> [id] [--default] [--yes]` | Continue a conversation on another account, restarting it in its own tab (tmux, Terminal.app, iTerm2) or resuming it here. |
 | `default [name\|main]` | Show or set the account plain `claude` starts on. |
+| `pin [name\|main\|--clear]` | Pin the current folder and its subfolders to an account, show the pin, or remove it. |
 | `setup-shell [--remove] [--shell zsh\|bash\|fish]` | Install or remove the hook that makes plain `claude` follow the default. |
 | `shell-init [zsh\|bash\|fish]` | Print that hook. |
 | `list` | List accounts and the email each is signed in as. |
@@ -351,7 +364,7 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 - **Switching.** A running Claude Code process cannot change its login, so `switch` restarts it with `--resume` under the other account. If the session's registry entry names a tmux pane, the restart is scheduled through the tmux server (`respawn-pane`), so it works from inside the session and keeps the pane's original start command. Otherwise the session is asked to exit (`SIGTERM`) and resumed in the terminal that ran `switch`.
 - **Private history.** A private account has a real `projects/` folder instead of the shared symlink, and a `.private` marker so it is never re-linked. Session discovery scans every distinct history folder.
 - **Codex.** Codex reads its login from `$CODEX_HOME`; each account gets `~/.claude-accounts/<name>/codex`, with configuration symlinked from `~/.codex`. The Codex email shown by `list` is read from the login's ID-token claims; tokens are never printed or copied.
-- **Default account.** The default is a name in `~/.claude-accounts/.default`. The shell hook defines a `claude` function that reads it on every call and sets `CLAUDE_CONFIG_DIR` only when it is not already set.
+- **Default account and pins.** The default is a name in `~/.claude-accounts/.default`; a pin is a `.claude-account` file holding an account name. The shell hook defines a `claude` function that, on every call, looks for the nearest `.claude-account` from the current folder upwards, falls back to the default, and sets `CLAUDE_CONFIG_DIR` only when it is not already set. It uses shell builtins for the folder walk, so it adds no noticeable start-up time.
 
 ## Security and privacy
 
@@ -369,7 +382,7 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 ## Development
 
 ```sh
-bash tests/run.sh                          # 113 tests
+bash tests/run.sh                          # 129 tests
 bash demo/setup.sh && vhs demo/demo.tape   # re-record the demo GIF (requires vhs)
 ```
 

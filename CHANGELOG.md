@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-12
+
+### Added
+- Per-folder accounts: `pin <name|main>` writes a `.claude-account` file, and
+  plain `claude` in that folder or any subfolder starts on that account. The
+  nearest pin wins; precedence is `CLAUDE_CONFIG_DIR`, pin, default, `main`.
+  Inside a git repository the file is added to `.git/info/exclude`. `pin`
+  shows the active pin and `pin --clear` removes it.
+- `whoami`, `refresh` and `handoff codex` follow the folder's pin.
+- CI installs fish and zsh on Linux so the shell-hook tests run for all three
+  shells.
+
 ## [0.3.0] - 2026-10-12
 
 ### Added
@@ -72,7 +84,8 @@ All notable changes to this project are documented here. The format follows
 - `/handoff` slash command via `install-command`; `save-brief`, `briefs`.
 - Secret redaction in condensed transcripts.
 
-[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/orvi2014/claude-account/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/orvi2014/claude-account/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/orvi2014/claude-account/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/orvi2014/claude-account/releases/tag/v0.1.0

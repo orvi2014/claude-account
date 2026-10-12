@@ -7,7 +7,7 @@
 # with ~/.claude by symlink; only the login and ~/.claude.json are per account.
 set -euo pipefail
 
-VERSION=0.3.0
+VERSION=0.4.0
 BASE="${CLAUDE_ACCOUNTS_DIR:-$HOME/.claude-accounts}"
 MAIN="$HOME/.claude"
 SHARED=(settings.json settings.local.json CLAUDE.md agents skills plugins projects commands hooks)
@@ -39,6 +39,9 @@ Usage: claude-account <command> [name] [claude args...]
                       in tmux; from another terminal it closes the session
                       where it is open and resumes it there
   default [name|main] show or set the account plain 'claude' starts with
+  pin [name|main|--clear]
+                      pin this folder (and everything below it) to an account:
+                      plain 'claude' here starts on it. No argument: show it
   setup-shell [--remove] [--shell zsh|bash|fish]
                       add (or remove) the hook that makes plain 'claude'
                       follow the default, in your shell's startup file
@@ -99,6 +102,40 @@ set_default() {
   fi
   echo "Default account: $name (new 'claude' sessions start on it)"
   [[ "$name" == main ]] || ensure_hook
+}
+
+# folder_pin: "<name>\t<file>" for the nearest .claude-account at or above $PWD.
+folder_pin() {
+  local d="$PWD" line name
+  while [[ -n "$d" ]]; do
+    if [[ -r "$d/.claude-account" ]]; then
+      name=""
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line//[[:space:]]/}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        name="$line"; break
+      done < "$d/.claude-account"
+      printf '%s\t%s\n' "$name" "$d/.claude-account"
+      return 0
+    fi
+    d="${d%/*}"
+  done
+  return 1
+}
+
+# new_session_account: "<name>\t<why>" for a plain `claude` started here,
+# with CLAUDE_CONFIG_DIR unset: folder pin, then default, then main.
+new_session_account() {
+  local pin name
+  if pin="$(folder_pin)"; then
+    name="$(cut -f1 <<<"$pin")"
+    if [[ -n "$name" && ( "$name" == main || -d "$BASE/$name" ) ]]; then
+      printf '%s\tpinned by %s\n' "$name" "$(cut -f2 <<<"$pin" | sed "s|^$HOME|~|")"; return
+    fi
+    printf 'main\t%s names unknown account %s\n' "$(cut -f2 <<<"$pin" | sed "s|^$HOME|~|")" "${name:-(empty)}"; return
+  fi
+  name="$(default_name)"
+  [[ "$name" == main ]] && printf 'main\tno pin or default\n' || printf '%s\tdefault\n' "$name"
 }
 
 user_shell() {
@@ -168,11 +205,27 @@ shell_init() {
   if [[ "${1:-}" == fish ]]; then
     cat <<EOF
 function claude --wraps claude
-  if not set -q CLAUDE_CONFIG_DIR; and test -r "$DEFAULT_FILE"
-    set -l _ca_name (string trim < "$DEFAULT_FILE")
-    if test -n "\$_ca_name"; and test -d "$BASE/\$_ca_name"
-      CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude \$argv
-      return
+  if not set -q CLAUDE_CONFIG_DIR
+    set -l _ca_name ""
+    set -l _ca_found 0
+    set -l _ca_d \$PWD
+    while test -n "\$_ca_d"
+      if test -r "\$_ca_d/.claude-account"
+        set _ca_name (string trim -- (string match -rv '^\\s*(#|\$)' < "\$_ca_d/.claude-account")[1])
+        set _ca_found 1
+        break
+      end
+      set _ca_d (string replace -r '/[^/]*\$' '' -- \$_ca_d)
+    end
+    if test \$_ca_found = 0; and test -r "$DEFAULT_FILE"
+      set _ca_name (string trim < "$DEFAULT_FILE")
+    end
+    if test -n "\$_ca_name"; and test "\$_ca_name" != main
+      if test -d "$BASE/\$_ca_name"
+        CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude \$argv
+        return
+      end
+      echo "claude-account: no account '\$_ca_name'; starting on main" >&2
     end
   end
   command claude \$argv
@@ -182,12 +235,29 @@ EOF
   fi
   cat <<EOF
 claude() {
-  if [ -z "\${CLAUDE_CONFIG_DIR-}" ] && [ -r "$DEFAULT_FILE" ]; then
-    local _ca_name
-    _ca_name="\$(tr -d '[:space:]' < "$DEFAULT_FILE")"
-    if [ -n "\$_ca_name" ] && [ -d "$BASE/\$_ca_name" ]; then
-      CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude "\$@"
-      return
+  if [ -z "\${CLAUDE_CONFIG_DIR-}" ]; then
+    local _ca_name="" _ca_found=0 _ca_d="\$PWD" _ca_l
+    # A .claude-account file in this folder or a parent pins the account.
+    while [ -n "\$_ca_d" ]; do
+      if [ -r "\$_ca_d/.claude-account" ]; then
+        while IFS= read -r _ca_l || [ -n "\$_ca_l" ]; do
+          _ca_l="\${_ca_l//[[:space:]]/}"
+          case "\$_ca_l" in ''|'#'*) continue ;; esac
+          _ca_name="\$_ca_l"; break
+        done < "\$_ca_d/.claude-account"
+        _ca_found=1; break
+      fi
+      _ca_d="\${_ca_d%/*}"
+    done
+    if [ "\$_ca_found" = 0 ] && [ -r "$DEFAULT_FILE" ]; then
+      _ca_name="\$(tr -d '[:space:]' < "$DEFAULT_FILE")"
+    fi
+    if [ -n "\$_ca_name" ] && [ "\$_ca_name" != main ]; then
+      if [ -d "$BASE/\$_ca_name" ]; then
+        CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude "\$@"
+        return
+      fi
+      echo "claude-account: no account '\$_ca_name'; starting on main" >&2
     fi
   fi
   command claude "\$@"
@@ -857,7 +927,8 @@ owner_dir() {
   elif [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
     echo "$CLAUDE_CONFIG_DIR"
   else
-    echo "$MAIN"
+    local n; n="$(new_session_account | cut -f1)"
+    [[ "$n" == main ]] && echo "$MAIN" || echo "$BASE/$n"
   fi
 }
 
@@ -963,7 +1034,7 @@ pick_session() {
 case "$cmd" in
   add)
     name="${1:?name required}"; valid "$name"
-    case "$name" in main|codex|codex-login|private|update|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
+    case "$name" in main|codex|codex-login|private|update|pin|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
       echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
     dir="$(dir_of "$name")"
     [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
@@ -1139,6 +1210,34 @@ case "$cmd" in
     done
     run "$dir" ${args[@]+"${args[@]}"}
     ;;
+  pin)
+    if [[ -z "${1:-}" ]]; then
+      if p="$(folder_pin)"; then
+        echo "$(cut -f1 <<<"$p")  (pinned by $(cut -f2 <<<"$p" | sed "s|^$HOME|~|"))"
+      else
+        echo "Not pinned; new sessions here use: $(new_session_account | cut -f1)"
+      fi
+    elif [[ "$1" == --clear ]]; then
+      if [[ -e "$PWD/.claude-account" ]]; then
+        rm -f "$PWD/.claude-account"; echo "Unpinned $PWD"
+      else
+        echo "No .claude-account in $PWD" >&2
+      fi
+      p="$(folder_pin)" && echo "Still pinned to $(cut -f1 <<<"$p") by $(cut -f2 <<<"$p" | sed "s|^$HOME|~|")"
+      true
+    else
+      name="$1"
+      [[ "$name" == main ]] || { valid "$name"; [[ -d "$BASE/$name" ]] || { echo "No profile $name" >&2; exit 1; }; }
+      printf '# claude-account: Claude Code sessions in this folder use this account\n%s\n' "$name" > "$PWD/.claude-account"
+      echo "Pinned $PWD to '$name' ($(email_of "$( [[ "$name" == main ]] && echo "$HOME" || echo "$BASE/$name")"))"
+      if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && ! git check-ignore -q "$PWD/.claude-account" 2>/dev/null; then
+        ex="$(git rev-parse --git-path info/exclude)"
+        mkdir -p "$(dirname "$ex")"; echo ".claude-account" >> "$ex"
+        echo "Added .claude-account to this repo's local ignore (.git/info/exclude), so it is not committed."
+      fi
+      ensure_hook
+    fi
+    ;;
   default)
     if [[ -z "${1:-}" ]]; then
       default_name
@@ -1253,12 +1352,12 @@ case "$cmd" in
       cur="$MAIN"; cfg="$HOME"
     fi
     printf "%-16s %s\n" "$(account_label "$cur")" "$(email_of "$cfg")$( [[ -n "${CLAUDECODE:-}" ]] && echo "  (this Claude session)" || echo "  (this shell)")"
-    def="$(default_name)"
+    nsa="$(new_session_account)"; def="$(cut -f1 <<<"$nsa")"
     sh="$(user_shell 2>/dev/null || true)"
     if [[ "$def" != main && -n "$sh" ]] && ! hook_installed "$sh"; then
-      echo "new 'claude' sessions: main (default '$def' is set, but the shell hook is missing: claude-account setup-shell)"
+      echo "new 'claude' sessions here: main (should be '$def', $(cut -f2 <<<"$nsa"), but the shell hook is missing: claude-account setup-shell)"
     else
-      echo "new 'claude' sessions: $def"
+      echo "new 'claude' sessions here: $def ($(cut -f2 <<<"$nsa"))"
     fi
     ;;
   -V|--version|version) echo "claude-account $VERSION" ;;
