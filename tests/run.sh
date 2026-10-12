@@ -8,7 +8,7 @@ BIN="$ROOT/bin/claude-account"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 export HOME="$T/home" CLAUDE_ACCOUNTS_DIR="$T/home/.claude-accounts"
-unset CLAUDE_CONFIG_DIR CLAUDE_CODE_SESSION_ID CLAUDE_PID TMUX TMUX_PANE
+unset CLAUDE_CONFIG_DIR CLAUDE_CODE_SESSION_ID CLAUDE_PID TMUX TMUX_PANE XDG_CONFIG_HOME ZDOTDIR
 mkdir -p "$HOME/.claude/projects" "$HOME/.claude/sessions" "$T/fake" "$T/work"
 echo '{}' > "$HOME/.claude/settings.json"
 mkdir -p "$HOME/.claude/agents"
