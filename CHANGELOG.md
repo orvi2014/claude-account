@@ -1,10 +1,39 @@
 # Changelog
 
+hatswap was called **claude-account** until 0.5.0.
+
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-10-12
+
+### Changed
+- **Renamed to hatswap** (repository `orvi2014/hatswap`, command `hatswap`), to
+  avoid confusion with an unrelated project also called claude-account. Old
+  GitHub links redirect.
+- New names: `.hatswap` pin files, `HATSWAP_DIR`, `HATSWAP_KEEP_AUTH_ENV`,
+  `HATSWAP_SWITCH_DELAY`, `HATSWAP_SOURCE`/`HATSWAP_REF` (installer), and
+  `# >>> hatswap >>>` / `# hatswap PATH` markers.
+- `/handoff` and `/switch` now call `hatswap`; existing copies are flagged as
+  outdated until `hatswap install-command` is run.
+
+### Kept compatible
+- `claude-account` keeps working: the installer adds it as an alias, and
+  `bin/claude-account` in the repository is a stand-in that runs hatswap
+  (fetching it once if needed), so `claude-account update` on older installs
+  moves them to hatswap.
+- The data folder stays `~/.claude-accounts`: Claude Code ties each account's
+  Keychain login to that path, so moving it would sign every account out.
+- `.claude-account` pins, `CLAUDE_ACCOUNTS_DIR`, `CLAUDE_ACCOUNT_*` variables
+  and old hook blocks are still honoured; re-pinning converts a pin file.
+
+### Added
+- README sections: upgrading from claude-account, and how hatswap differs from
+  other account switchers.
+- Demo GIF and how-it-works diagram updated for the new name.
 
 ## [0.4.2] - 2026-10-12
 
@@ -110,10 +139,11 @@ All notable changes to this project are documented here. The format follows
 - `/handoff` slash command via `install-command`; `save-brief`, `briefs`.
 - Secret redaction in condensed transcripts.
 
-[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.4.2...HEAD
-[0.4.2]: https://github.com/orvi2014/claude-account/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/orvi2014/claude-account/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/orvi2014/claude-account/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/orvi2014/claude-account/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/orvi2014/claude-account/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/orvi2014/claude-account/releases/tag/v0.1.0
+[Unreleased]: https://github.com/orvi2014/hatswap/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/orvi2014/hatswap/compare/v0.4.2...v0.5.0
+[0.4.2]: https://github.com/orvi2014/hatswap/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/orvi2014/hatswap/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/orvi2014/hatswap/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/orvi2014/hatswap/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/orvi2014/hatswap/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/orvi2014/hatswap/releases/tag/v0.1.0

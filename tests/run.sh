@@ -4,7 +4,7 @@
 # ~/.claude or Keychain.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/bin/claude-account"
+BIN="$ROOT/bin/hatswap"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 export HOME="$T/home" CLAUDE_ACCOUNTS_DIR="$T/home/.claude-accounts"
@@ -96,7 +96,7 @@ ok "main runs with CLAUDE_CONFIG_DIR unset" '[[ "$(tty_run "$BIN" main)" == *"CO
 # whoami / version
 ok "whoami shows the main account by default" '[[ "$("$BIN" whoami)" == "main"*"me@example.com"* ]]'
 ok "whoami follows CLAUDE_CONFIG_DIR" '[[ "$(CLAUDE_CONFIG_DIR="$CLAUDE_ACCOUNTS_DIR/work" "$BIN" whoami | head -1)" == work* ]]'
-ok "--version prints the version" '[[ "$("$BIN" --version)" == "claude-account "[0-9]* ]]'
+ok "--version prints the version" '[[ "$("$BIN" --version)" == "hatswap "[0-9]* ]]'
 ok "remove without input does not crash" '"$BIN" remove work </dev/null >/dev/null 2>&1; [[ -d "$CLAUDE_ACCOUNTS_DIR/work" ]]'
 
 # auth environment variables never override an account's login
@@ -151,9 +151,9 @@ ok "use --default sets default and is not passed to claude" '[[ "$("$BIN" defaul
 "$BIN" default main >/dev/null 2>&1
 
 # setup-shell
-ok "setup-shell adds the hook to .zshrc" '"$BIN" setup-shell --shell zsh >/dev/null && grep -q "claude-account shell-init zsh" "$HOME/.zshrc"'
+ok "setup-shell adds the hook to .zshrc" '"$BIN" setup-shell --shell zsh >/dev/null && grep -q "hatswap shell-init zsh" "$HOME/.zshrc"'
 "$BIN" setup-shell --shell zsh >/dev/null
-ok "setup-shell is idempotent" '[[ "$(grep -c ">>> claude-account >>>" "$HOME/.zshrc")" == 1 ]]'
+ok "setup-shell is idempotent" '[[ "$(grep -c ">>> hatswap >>>" "$HOME/.zshrc")" == 1 ]]'
 "$BIN" default work >/dev/null 2>&1
 if command -v zsh >/dev/null; then
   ok "installed hook makes plain claude follow the default" '[[ "$(PATH="$(dirname "$BIN"):$PATH" ZDOTDIR="$HOME" zsh -ic "claude hi" 2>/dev/null)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=hi"* ]]'
@@ -161,12 +161,12 @@ fi
 "$BIN" default main >/dev/null 2>&1
 echo "keep-me" >> "$HOME/.zshrc"
 "$BIN" setup-shell --shell zsh --remove >/dev/null
-ok "setup-shell --remove takes out only the hook" '! grep -q claude-account "$HOME/.zshrc" && grep -q keep-me "$HOME/.zshrc"'
+ok "setup-shell --remove takes out only the hook" '! grep -q hatswap "$HOME/.zshrc" && grep -q keep-me "$HOME/.zshrc"'
 ok "setup-shell rejects unknown shells" '! "$BIN" setup-shell --shell tcsh >/dev/null 2>&1'
 "$BIN" setup-shell --shell fish >/dev/null
-ok "setup-shell for fish writes a conf.d file" 'grep -q "shell-init fish | source" "$HOME/.config/fish/conf.d/claude-account.fish"'
+ok "setup-shell for fish writes a conf.d file" 'grep -q "shell-init fish | source" "$HOME/.config/fish/conf.d/hatswap.fish"'
 "$BIN" setup-shell --shell fish --remove >/dev/null
-ok "fish hook file is removed when empty" '[[ ! -e "$HOME/.config/fish/conf.d/claude-account.fish" ]]'
+ok "fish hook file is removed when empty" '[[ ! -e "$HOME/.config/fish/conf.d/hatswap.fish" ]]'
 if command -v fish >/dev/null; then
   "$BIN" default work >/dev/null 2>&1
   ok "fish hook follows the default" '[[ "$(fish -c "\"$BIN\" shell-init fish | source; claude hi")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
@@ -177,10 +177,10 @@ fi
 mkdir -p "$T/work/sub/deeper"
 hook_claude() { (cd "$1" && bash -c "eval \"\$(\"$BIN\" shell-init bash)\"; claude hi" 2>&1); }
 out="$(cd "$T/work" && "$BIN" pin work 2>&1)"
-ok "pin writes .claude-account" '[[ "$out" == *"Pinned"* ]] && grep -qx work "$T/work/.claude-account"'
-ok "pin keeps the file out of git" 'grep -qx ".claude-account" "$T/work/.git/info/exclude" && [[ -z "$(cd "$T/work" && git status --short .claude-account)" ]]'
+ok "pin writes .hatswap" '[[ "$out" == *"Pinned"* ]] && grep -qx work "$T/work/.hatswap"'
+ok "pin keeps the file out of git" 'grep -qx ".hatswap" "$T/work/.git/info/exclude" && [[ -z "$(cd "$T/work" && git status --short .hatswap)" ]]'
 (cd "$T/work" && "$BIN" pin work >/dev/null 2>&1)
-ok "pin adds the ignore line once" '[[ "$(grep -c "^.claude-account$" "$T/work/.git/info/exclude")" == 1 ]]'
+ok "pin adds the ignore line once" '[[ "$(grep -c "^.hatswap$" "$T/work/.git/info/exclude")" == 1 ]]'
 ok "hook uses the pin in that folder" '[[ "$(hook_claude "$T/work")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=hi"* ]]'
 ok "hook uses the pin in subfolders" '[[ "$(hook_claude "$T/work/sub/deeper")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
 ok "hook ignores the pin outside the folder" '[[ "$(hook_claude "$T")" == *"CONFIG=<unset>"* ]]'
@@ -190,21 +190,21 @@ ok "explicit CLAUDE_CONFIG_DIR beats the pin" '[[ "$(cd "$T/work" && CLAUDE_CONF
 ok "a nearer pin wins, and main overrides the default" '[[ "$(hook_claude "$T/work/sub/deeper")" == *"CONFIG=<unset>"* ]]'
 ok "outside any pin the default still applies" '[[ "$(hook_claude "$T")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
 "$BIN" default main >/dev/null 2>&1
-ok "pin shows the nearest pin" '[[ "$(cd "$T/work/sub/deeper" && "$BIN" pin)" == "main  (pinned by "*"/work/sub/.claude-account)" ]]'
+ok "pin shows the nearest pin" '[[ "$(cd "$T/work/sub/deeper" && "$BIN" pin)" == "main  (pinned by "*"/work/sub/.hatswap)" ]]'
 SHELL=/bin/zsh "$BIN" setup-shell --shell zsh >/dev/null
 ok "whoami reports the pin" '[[ "$(cd "$T/work" && SHELL=/bin/zsh "$BIN" whoami 2>/dev/null)" == *"new '"'"'claude'"'"' sessions here: work (pinned by "* ]]'
 ok "whoami flags a pin the shell hook cannot apply" '"$BIN" setup-shell --shell zsh --remove >/dev/null; [[ "$(cd "$T/work" && SHELL=/bin/zsh "$BIN" whoami 2>/dev/null)" == *"should be '"'"'work'"'"', pinned by"*"hook is missing"* ]]'
 out="$(cd "$T/work" && tty_run "$BIN" refresh)"
 ok "refresh in a pinned folder uses the pinned account" '[[ "$out" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=You are taking over"* ]]'
-printf '# note\n\n  nope  \n' > "$T/work/sub/.claude-account"
+printf '# note\n\n  nope  \n' > "$T/work/sub/.hatswap"
 ok "a pin naming an unknown account falls back to main with a warning" '[[ "$(hook_claude "$T/work/sub")" == *"no account '"'"'nope'"'"'"*"CONFIG=<unset>"* ]]'
 ok "pin rejects unknown accounts" '! (cd "$T/work" && "$BIN" pin nope >/dev/null 2>&1)'
 (cd "$T/work/sub" && "$BIN" pin --clear >/dev/null 2>&1)
-ok "pin --clear removes the pin" '[[ ! -e "$T/work/sub/.claude-account" ]]'
+ok "pin --clear removes the pin" '[[ ! -e "$T/work/sub/.hatswap" ]]'
 if command -v fish >/dev/null; then
   ok "fish hook follows the pin" '[[ "$(cd "$T/work/sub/deeper" && fish -c "\"$BIN\" shell-init fish | source; claude hi")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
 fi
-rm -f "$T/work/.claude-account"
+rm -f "$T/work/.hatswap"
 
 # switch
 ok "switch resumes a closed session on the target" '[[ "$(tty_run "$BIN" switch work)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=--resume 22222222"* ]]'
@@ -316,11 +316,11 @@ ok "--from rejects a missing file" '[[ "$(tty_run "$BIN" handoff work --from /no
 
 # install-command
 "$BIN" install-command >/dev/null
-ok "install-command writes /switch" 'grep -q "claude-account switch \$ARGUMENTS" "$HOME/.claude/commands/switch.md"'
-ok "install-command writes /handoff" '[[ -f "$HOME/.claude/commands/handoff.md" ]] && grep -q "## Tried and rejected" "$HOME/.claude/commands/handoff.md" && grep -q "claude-account save-brief" "$HOME/.claude/commands/handoff.md" && grep -q "\$ARGUMENTS" "$HOME/.claude/commands/handoff.md"'
+ok "install-command writes /switch" 'grep -q "hatswap switch \$ARGUMENTS" "$HOME/.claude/commands/switch.md"'
+ok "install-command writes /handoff" '[[ -f "$HOME/.claude/commands/handoff.md" ]] && grep -q "## Tried and rejected" "$HOME/.claude/commands/handoff.md" && grep -q "hatswap save-brief" "$HOME/.claude/commands/handoff.md" && grep -q "\$ARGUMENTS" "$HOME/.claude/commands/handoff.md"'
 ok "install-command updates its own files" '"$BIN" install-command >/dev/null 2>&1'
-ok "installed commands carry the template revision" 'grep -q "claude-account-commands:" "$HOME/.claude/commands/switch.md"'
-sed -i.bak "/claude-account-commands:/d" "$HOME/.claude/commands/handoff.md"
+ok "installed commands carry the template revision" 'grep -q "hatswap-commands:" "$HOME/.claude/commands/switch.md"'
+sed -i.bak "/hatswap-commands:/d" "$HOME/.claude/commands/handoff.md"
 ok "outdated commands are reported" '[[ "$("$BIN" list 2>&1)" == *"commands are out of date (/handoff)"* ]]'
 "$BIN" install-command >/dev/null
 ok "install-command clears the outdated note" '[[ "$("$BIN" list 2>&1)" != *"out of date"* ]]'
@@ -409,13 +409,17 @@ fi
 # installer
 mkdir -p "$T/ihome"
 out="$(HOME="$T/ihome" SHELL=/bin/zsh ZDOTDIR= PATH="$T/fake:/usr/bin:/bin" CLAUDE_ACCOUNT_SOURCE="$BIN" bash "$ROOT/install.sh" 2>&1)"
-ok "install.sh installs the script" '[[ -x "$T/ihome/.local/bin/claude-account" && "$out" == *"Installed claude-account "* ]]'
-ok "install.sh adds PATH and the default-account hook" 'grep -q "claude-account PATH" "$T/ihome/.zshrc" && grep -q ">>> claude-account >>>" "$T/ihome/.zshrc"'
+ok "install.sh installs the script" '[[ -x "$T/ihome/.local/bin/hatswap" && "$out" == *"Installed hatswap "* ]]'
+ok "install.sh keeps claude-account as an alias" '[[ "$(readlink "$T/ihome/.local/bin/claude-account")" == hatswap && "$("$T/ihome/.local/bin/claude-account" --version)" == "hatswap "* ]]'
+ok "install.sh adds PATH and the default-account hook" 'grep -q "hatswap PATH" "$T/ihome/.zshrc" && grep -q ">>> hatswap >>>" "$T/ihome/.zshrc"'
 ok "install.sh installs /handoff and /switch" '[[ -f "$T/ihome/.claude/commands/handoff.md" && -f "$T/ihome/.claude/commands/switch.md" ]]'
 HOME="$T/ihome" SHELL=/bin/zsh PATH="$T/fake:/usr/bin:/bin" CLAUDE_ACCOUNT_SOURCE="$BIN" bash "$ROOT/install.sh" >/dev/null 2>&1
-ok "install.sh is idempotent" '[[ "$(grep -c "claude-account PATH" "$T/ihome/.zshrc")" == 1 && "$(grep -c ">>> claude-account >>>" "$T/ihome/.zshrc")" == 1 ]]'
+ok "install.sh is idempotent" '[[ "$(grep -c "hatswap PATH" "$T/ihome/.zshrc")" == 1 && "$(grep -c ">>> hatswap >>>" "$T/ihome/.zshrc")" == 1 ]]'
 out="$(HOME="$T/ihome" SHELL=/bin/zsh CLAUDE_ACCOUNT_SOURCE="$BIN" bash "$ROOT/install.sh" --no-shell --no-commands --bin-dir "$T/ib" 2>&1)"
-ok "install.sh --bin-dir --no-shell installs only the script" '[[ -x "$T/ib/claude-account" && "$out" == *"not on your PATH"* ]]'
+ok "install.sh --bin-dir --no-shell installs only the script" '[[ -x "$T/ib/hatswap" && "$out" == *"not on your PATH"* ]]'
+mkdir -p "$T/oldbin"; echo "#!/bin/sh" > "$T/oldbin/claude-account"; chmod +x "$T/oldbin/claude-account"
+out="$(HOME="$T/ihome" CLAUDE_ACCOUNT_SOURCE="$BIN" bash "$ROOT/install.sh" --no-shell --no-commands --bin-dir "$T/oldbin" 2>&1)"
+ok "install.sh replaces an old claude-account with the alias" '[[ -L "$T/oldbin/claude-account" && "$out" == *"Replaced the old claude-account"* ]]'
 
 # update (non-clone install, download stubbed)
 cat > "$T/fake/curl" <<F
@@ -425,8 +429,34 @@ F
 chmod +x "$T/fake/curl"
 mkdir -p "$T/ub"; sed 's/^VERSION=.*/VERSION=0.0.1/' "$BIN" > "$T/ub/claude-account"; chmod +x "$T/ub/claude-account"
 out="$("$T/ub/claude-account" update 2>&1)"
-ok "update replaces the script with the latest" '[[ "$out" == *"Updated: claude-account 0.0.1 -> "* ]] && cmp -s "$BIN" "$T/ub/claude-account"'
+ok "update from an old claude-account install moves it to hatswap" '[[ "$out" == *"Updated: hatswap 0.0.1 -> "* && "$out" == *"claude-account is now hatswap"* ]] && cmp -s "$BIN" "$T/ub/hatswap" && [[ "$(readlink "$T/ub/claude-account")" == hatswap ]]'
+sed 's/^VERSION=.*/VERSION=0.0.2/' "$BIN" > "$T/ub/hatswap"
+out="$("$T/ub/hatswap" update 2>&1)"
+ok "update replaces hatswap in place" '[[ "$out" == *"Updated: hatswap 0.0.2 -> "* ]] && cmp -s "$BIN" "$T/ub/hatswap"'
 rm -f "$T/fake/curl"
+
+# the old name keeps working
+ok "bin/claude-account runs hatswap" '[[ "$("$ROOT/bin/claude-account" --version)" == "hatswap "* ]]'
+mkdir -p "$T/shim"; cp "$ROOT/bin/claude-account" "$T/shim/claude-account"
+cat > "$T/fake/curl" <<F
+#!/bin/bash
+while [[ \$# -gt 0 ]]; do [[ "\$1" == -o ]] && { cp "$BIN" "\$2"; exit 0; }; shift; done
+F
+chmod +x "$T/fake/curl"
+out="$(PATH="$T/fake:/usr/bin:/bin" "$T/shim/claude-account" --version 2>&1)"
+ok "the claude-account stand-in fetches hatswap once if missing" '[[ "$out" == *"claude-account is now hatswap"* && "$out" == *"hatswap "[0-9]* && -x "$T/shim/hatswap" ]]'
+rm -f "$T/fake/curl"
+mkdir -p "$T/oldpin/sub"; echo work > "$T/oldpin/.claude-account"
+ok "an old .claude-account pin is still honoured" '[[ "$(cd "$T/oldpin/sub" && bash -c "eval \"\$(\"$BIN\" shell-init bash)\"; claude hi" 2>&1)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* && "$(cd "$T/oldpin" && "$BIN" pin)" == work* ]]'
+(cd "$T/oldpin" && "$BIN" pin main >/dev/null 2>&1)
+ok "pinning again moves an old pin file to .hatswap" '[[ -e "$T/oldpin/.hatswap" && ! -e "$T/oldpin/.claude-account" ]]'
+printf '# >>> claude-account >>>\nold hook\n# <<< claude-account <<<\nkeep\n' > "$HOME/.zshrc"
+ok "an old hook block counts as installed" '[[ "$(SHELL=/bin/zsh "$BIN" setup-shell --shell zsh)" == *"already"* ]]'
+"$BIN" setup-shell --shell zsh --remove >/dev/null
+ok "setup-shell --remove takes out an old hook block" '! grep -q "old hook" "$HOME/.zshrc" && grep -q keep "$HOME/.zshrc"'
+out="$(ANTHROPIC_API_KEY=sk-test HATSWAP_KEEP_AUTH_ENV=1 tty_run "$BIN" use work)"
+ok "HATSWAP_KEEP_AUTH_ENV=1 keeps the key" '[[ "$out" == *"AUTHKEY=sk-test"* ]]'
+ok "HATSWAP_DIR picks the data folder" '[[ "$(HATSWAP_DIR="$T/nowhere" "$BIN" list 2>/dev/null | wc -l | tr -d " ")" == 1 ]]'
 
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'

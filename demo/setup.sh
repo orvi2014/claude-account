@@ -4,9 +4,9 @@
 # `claude` and `gh`. Nothing touches your real configuration.
 set -euo pipefail
 DEMO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-S="${1:-/tmp/claude-account-demo}"
+S="${1:-/tmp/hatswap-demo}"
 rm -rf "${S:?}"; mkdir -p "$S/bin" "$S/home/.claude/projects" "$S/home/billing"
-ln -s "$DEMO_ROOT/../bin/claude-account" "$S/bin/claude-account"
+ln -s "$DEMO_ROOT/../bin/hatswap" "$S/bin/hatswap"
 cp "$DEMO_ROOT/stub-claude" "$S/bin/claude"; cp "$DEMO_ROOT/stub-gh" "$S/bin/gh"; cp "$DEMO_ROOT/stub-codex" "$S/bin/codex"; chmod +x "$S/bin/"*
 echo '{}' > "$S/home/.claude/settings.json"
 echo '{"oauthAccount":{"emailAddress":"personal@example.com"}}' > "$S/home/.claude.json"
@@ -39,13 +39,13 @@ sess("9f2d7c41-0b6e-4a53-8e2f-71c3d9a4b6e8", "Invoice totals are off by a cent w
 PY
 touch -t 202610110900 "$P/4c1e9a2b-7d3f-4e8a-9b1c-2f6d8e0a5c3b.jsonl"
 cat > "$S/env.sh" <<ENV
-export DEMO_ROOT="$DEMO_ROOT" HOME="$S/home" CLAUDE_ACCOUNTS_DIR="$S/home/.claude-accounts"
+export DEMO_ROOT="$DEMO_ROOT" HOME="$S/home" HATSWAP_DIR="$S/home/.claude-accounts"
 export PATH="$S/bin:\$PATH" PS1='\[\e[38;5;108m\]\w\[\e[0m\] \$ '
 export SHELL=/bin/bash
 unset CLAUDE_CONFIG_DIR CLAUDECODE CLAUDE_CODE_SESSION_ID TMUX TMUX_PANE
-eval "\$(claude-account shell-init bash)"
+eval "\$(hatswap shell-init bash)"
 cd "$S/home/billing"
 ENV
 # Mark the shell hook as installed so `default` does not offer to add it.
-printf '# >>> claude-account >>>\n# <<< claude-account <<<\n' > "$S/home/.bash_profile"
+printf '# >>> hatswap >>>\n# <<< hatswap <<<\n' > "$S/home/.bash_profile"
 echo "$S"

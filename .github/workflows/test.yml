@@ -10,5 +10,5 @@ jobs:
       - uses: actions/checkout@v4
       - if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq fish zsh
-      - run: bash -n bin/claude-account && bash -n install.sh
+      - run: bash -n bin/hatswap && bash -n bin/claude-account && bash -n install.sh
       - run: bash tests/run.sh

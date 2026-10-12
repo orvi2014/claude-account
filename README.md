@@ -1,15 +1,17 @@
-# claude-account
+# hatswap
 
-[![test](https://github.com/orvi2014/claude-account/actions/workflows/test.yml/badge.svg)](https://github.com/orvi2014/claude-account/actions/workflows/test.yml)
+[![test](https://github.com/orvi2014/hatswap/actions/workflows/test.yml/badge.svg)](https://github.com/orvi2014/hatswap/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platform: macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
 
-Multiple Claude Code accounts on one machine, with session handoff between them.
+Multiple Claude Code accounts on one machine, with session handoff between them. Wear a different hat for each client.
 
-`claude-account` keeps each Claude Code account signed in at the same time and moves work between them — by resuming a conversation, or by starting a fresh session from a compact, repository-aware handoff brief. The same brief can restart an overgrown session on the same account, or seed an OpenAI Codex session.
+> **Formerly `claude-account`.** Renamed in 0.5.0 to avoid confusion with an unrelated project of the same name. Old links redirect here, and the `claude-account` command keeps working as an alias. See [Upgrading from claude-account](#upgrading-from-claude-account).
+
+`hatswap` keeps each Claude Code account signed in at the same time and moves work between them — by resuming a conversation, or by starting a fresh session from a compact, repository-aware handoff brief. The same brief can restart an overgrown session on the same account, or seed an OpenAI Codex session.
 
 <p align="center">
-  <img src="demo/demo.gif" alt="claude-account: listing accounts and their Codex logins, checking the active one with whoami, switching a conversation to another account, pinning a folder so claude starts on that account inside it and on the default outside it, and handing the task to Codex on the pinned account's Codex login" width="900">
+  <img src="demo/demo.gif" alt="hatswap: listing accounts and their Codex logins, checking the active one with whoami, switching a conversation to another account, pinning a folder so claude starts on that account inside it and on the default outside it, and handing the task to Codex on the pinned account's Codex login" width="900">
 </p>
 
 <sub>Recorded in a sandbox with example accounts and a stand-in for <code>claude</code>; reproduce with <code>bash demo/setup.sh && vhs demo/demo.tape</code>.</sub>
@@ -29,6 +31,7 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 - [Security and privacy](#security-and-privacy)
 - [Limitations](#limitations)
 - [Development](#development)
+- [How this differs from other account switchers](#how-this-differs-from-other-account-switchers)
 - [Changelog](#changelog)
 - [License](#license)
 
@@ -69,10 +72,10 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 ### 1. Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/orvi2014/claude-account/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/orvi2014/hatswap/main/install.sh | bash
 ```
 
-This installs `claude-account` to `~/.local/bin`, adds that folder to your `PATH` if needed, installs the default-account shell hook and the `/handoff` and `/switch` commands. Open a new terminal afterwards. Every change is marked and reversible (see [Uninstall](#uninstall)).
+This installs `hatswap` to `~/.local/bin`, adds that folder to your `PATH` if needed, installs the default-account shell hook and the `/handoff` and `/switch` commands. Open a new terminal afterwards. Every change is marked and reversible (see [Uninstall](#uninstall)).
 
 Options go after `bash -s --`, for example `curl -fsSL …/install.sh | bash -s -- --no-shell`:
 
@@ -82,16 +85,16 @@ Options go after `bash -s --`, for example `curl -fsSL …/install.sh | bash -s 
 | `--no-commands` | Do not install `/handoff` and `/switch`. |
 | `--bin-dir <dir>` | Install somewhere other than `~/.local/bin`. |
 
-Update later with `claude-account update`. It also refreshes the slash commands.
+Update later with `hatswap update`. It also refreshes the slash commands.
 
 <details>
 <summary>Install by hand</summary>
 
 ```sh
 mkdir -p ~/.local/bin
-curl -fsSL https://raw.githubusercontent.com/orvi2014/claude-account/main/bin/claude-account \
-  -o ~/.local/bin/claude-account
-chmod +x ~/.local/bin/claude-account
+curl -fsSL https://raw.githubusercontent.com/orvi2014/hatswap/main/bin/hatswap \
+  -o ~/.local/bin/hatswap
+chmod +x ~/.local/bin/hatswap
 ```
 
 If `~/.local/bin` is not on your `PATH`, add it to your shell profile.
@@ -101,17 +104,17 @@ If `~/.local/bin` is not on your `PATH`, add it to your shell profile.
 <summary>Install from a clone instead</summary>
 
 ```sh
-git clone https://github.com/orvi2014/claude-account.git
-ln -s "$PWD/claude-account/bin/claude-account" ~/.local/bin/claude-account
+git clone https://github.com/orvi2014/hatswap.git
+ln -s "$PWD/hatswap/bin/hatswap" ~/.local/bin/hatswap
 ```
 
-`git pull` in the clone (or `claude-account update`) then updates the command.
+`git pull` in the clone (or `hatswap update`) then updates the command.
 </details>
 
 ### 2. Verify
 
 ```sh
-claude-account list
+hatswap list
 ```
 
 Your existing Claude Code login appears as `main`. It is used as-is and never modified.
@@ -119,13 +122,13 @@ Your existing Claude Code login appears as `main`. It is used as-is and never mo
 ### 3. Add a second account
 
 ```sh
-claude-account add work
+hatswap add work
 ```
 
 A browser window opens. Sign in with the **other** account — if the browser is already signed in to your main account, use a private window. Pass `--email you@company.com` to prefill the address, or `--console` to use an Anthropic Console (API billing) login.
 
 ```sh
-claude-account list
+hatswap list
 #   main   you@personal.com   (~/.claude)
 #   work   you@company.com
 ```
@@ -133,8 +136,8 @@ claude-account list
 ### 4. Let plain `claude` follow a default account (optional)
 
 ```sh
-claude-account setup-shell          # adds a guarded hook to your shell's startup file
-claude-account default work         # plain `claude` now starts on "work"
+hatswap setup-shell          # adds a guarded hook to your shell's startup file
+hatswap default work         # plain `claude` now starts on "work"
 ```
 
 `setup-shell` detects zsh, bash or fish (override with `--shell`), is safe to run twice, and is undone with `setup-shell --remove`. Open a new terminal afterwards.
@@ -142,40 +145,58 @@ claude-account default work         # plain `claude` now starts on "work"
 ### 5. Enable `/handoff` inside Claude Code (optional)
 
 ```sh
-claude-account install-command
+hatswap install-command
 ```
 
 This adds `~/.claude/commands/handoff.md` and `switch.md`, which every account shares. In any Claude Code session you can then run `/switch work`, `/handoff work`, `/handoff codex` or `/handoff`.
 
+### Upgrading from claude-account
+
+```sh
+claude-account update        # installs hatswap next to it; claude-account becomes an alias
+```
+
+Or re-run the installer. Nothing else changes: your accounts, logins, briefs, default account, pins and shell hook keep working. The data folder is still `~/.claude-accounts`, because Claude Code ties each account's Keychain login to that path; moving it would sign every account out. Older names are still honoured:
+
+| New | Still accepted |
+|---|---|
+| `hatswap` | `claude-account` (alias) |
+| `.hatswap` pin files | `.claude-account` (`pin` converts it when you re-pin) |
+| `HATSWAP_DIR` | `CLAUDE_ACCOUNTS_DIR` |
+| `HATSWAP_KEEP_AUTH_ENV`, `HATSWAP_SWITCH_DELAY` | `CLAUDE_ACCOUNT_KEEP_AUTH_ENV`, `CLAUDE_ACCOUNT_SWITCH_DELAY` |
+| `# >>> hatswap >>>` hook block | `# >>> claude-account >>>` |
+
+Run `hatswap install-command` once to update `/handoff` and `/switch` (they now call `hatswap`); `hatswap list` reminds you.
+
 ### Uninstall
 
 ```sh
-claude-account setup-shell --remove # if you added the shell hook
-claude-account remove work          # repeat for each added account (also signs out its Codex login)
-rm -f ~/.local/bin/claude-account ~/.claude/commands/handoff.md ~/.claude/commands/switch.md
+hatswap setup-shell --remove # if you added the shell hook
+hatswap remove work          # repeat for each added account (also signs out its Codex login)
+rm -f ~/.local/bin/hatswap ~/.local/bin/claude-account ~/.claude/commands/handoff.md ~/.claude/commands/switch.md
 rm -r ~/.claude-accounts            # saved briefs
 ```
 
-The installer's `PATH` line is marked `# claude-account PATH` in your shell profile; delete that line too.
+The installer's `PATH` line is marked `# hatswap PATH` in your shell profile; delete that line too.
 
 ## Usage
 
 **Work on another account**
 
 ```sh
-claude-account use work             # or simply: claude-account work
-claude-account main                 # back to the main account (~/.claude)
+hatswap use work             # or simply: hatswap work
+hatswap main                 # back to the main account (~/.claude)
 ```
 
-Run each in its own terminal to use both at once. `claude-account whoami` shows which account the current shell or Claude session is on, and which one a new `claude` starts on (inside Claude Code, `! claude-account whoami` or `/status`).
+Run each in its own terminal to use both at once. `hatswap whoami` shows which account the current shell or Claude session is on, and which one a new `claude` starts on (inside Claude Code, `! hatswap whoami` or `/status`).
 
 **Switch the account of the current conversation**
 
 Inside Claude Code:
 
 ```text
-! claude-account switch work            # or /switch work (after install-command)
-! claude-account switch work --default  # also make "work" the default for new sessions
+! hatswap switch work            # or /switch work (after install-command)
+! hatswap switch work --default  # also make "work" the default for new sessions
 ```
 
 A running Claude Code process cannot change its login, so `switch` restarts it: the same conversation (full history, same ID) resumes on the other account, in the **same tab**:
@@ -184,45 +205,45 @@ A running Claude Code process cannot change its login, so `switch` restarts it: 
 |---|---|
 | tmux, including desktop apps that host each tab in tmux | The pane restarts in place, keeping its original flags, hooks and MCP config. |
 | Terminal.app or iTerm2 (macOS) | Claude exits and the resume command is typed into that tab. macOS asks once to let your terminal control Terminal/iTerm2. |
-| Anything else | Type `/exit`, then run `claude-account switch work` in that terminal. |
+| Anything else | Type `/exit`, then run `hatswap switch work` in that terminal. |
 
 Run from a different terminal, `switch` restarts the session in its own tab when it can, and otherwise closes it there and resumes it in the terminal you ran it from.
 
 **Choose the default account**
 
 ```sh
-claude-account default work         # plain `claude` now starts on "work"
-claude-account use work --default   # set it and start a session
-claude-account default main         # back to ~/.claude
-claude-account default              # show the current default
+hatswap default work         # plain `claude` now starts on "work"
+hatswap use work --default   # set it and start a session
+hatswap default main         # back to ~/.claude
+hatswap default              # show the current default
 ```
 
-The first time you set a default, `claude-account` offers to add a one-line hook to your shell's startup file (`~/.zshrc`, `~/.bash_profile` / `~/.bashrc`, or fish `conf.d`) so plain `claude` follows it. The hook reads the default on every call, so changing it later needs no reload. An explicit `CLAUDE_CONFIG_DIR` always wins.
+The first time you set a default, `hatswap` offers to add a one-line hook to your shell's startup file (`~/.zshrc`, `~/.bash_profile` / `~/.bashrc`, or fish `conf.d`) so plain `claude` follows it. The hook reads the default on every call, so changing it later needs no reload. An explicit `CLAUDE_CONFIG_DIR` always wins.
 
 **Pin a folder to an account**
 
 ```sh
-cd ~/clients/acme && claude-account pin acme   # plain `claude` here, and in every subfolder, starts on "acme"
-claude-account pin                             # show which pin applies here
-claude-account pin main                        # this folder uses main, whatever the default
-claude-account pin --clear                     # remove this folder's pin
+cd ~/clients/acme && hatswap pin acme   # plain `claude` here, and in every subfolder, starts on "acme"
+hatswap pin                             # show which pin applies here
+hatswap pin main                        # this folder uses main, whatever the default
+hatswap pin --clear                     # remove this folder's pin
 ```
 
-`pin` writes a one-line `.claude-account` file. Inside a git repository it is added to the repository's local ignore (`.git/info/exclude`), so it is never committed. The nearest pin wins, so a subfolder can pin a different account. Order of precedence for a plain `claude`: an explicit `CLAUDE_CONFIG_DIR`, then the nearest pin, then the default account, then `main`. `whoami` shows which one applies and why, and `refresh` and `handoff codex` follow it too. Pins work through the same shell hook as the default.
+`pin` writes a one-line `.hatswap` file. Inside a git repository it is added to the repository's local ignore (`.git/info/exclude`), so it is never committed. The nearest pin wins, so a subfolder can pin a different account. Order of precedence for a plain `claude`: an explicit `CLAUDE_CONFIG_DIR`, then the nearest pin, then the default account, then `main`. `whoami` shows which one applies and why, and `refresh` and `handoff codex` follow it too. Pins work through the same shell hook as the default.
 
 **Move a task to another account**
 
 ```sh
-claude-account sessions             # conversations in this folder, and where each is open
-claude-account handoff work --brief # fresh session on "work", seeded with a brief
-claude-account handoff work         # or resume the full conversation (close the original first)
+hatswap sessions             # conversations in this folder, and where each is open
+hatswap handoff work --brief # fresh session on "work", seeded with a brief
+hatswap handoff work         # or resume the full conversation (close the original first)
 ```
 
 **Restart a session that has grown too long**
 
 ```sh
-claude-account refresh              # brief + fresh session on the same account
-claude-account refresh --edit       # review the brief in $EDITOR first
+hatswap refresh              # brief + fresh session on the same account
+hatswap refresh --edit       # review the brief in $EDITOR first
 ```
 
 **Hand off from inside a running session**
@@ -231,21 +252,21 @@ claude-account refresh --edit       # review the brief in $EDITOR first
 /handoff work
 ```
 
-Claude writes the brief from its own context, saves it, and prints the command to continue — for example `claude-account handoff work --from ~/.claude-accounts/.briefs/….md`.
+Claude writes the brief from its own context, saves it, and prints the command to continue — for example `hatswap handoff work --from ~/.claude-accounts/.briefs/….md`.
 
 **Continue in Codex**
 
 ```sh
-claude-account handoff codex
+hatswap handoff codex
 ```
 
 **Give each account its own Codex login**
 
 ```sh
-claude-account codex-login acme      # sign "acme" in to its Codex (ChatGPT/OpenAI) account
-claude-account codex acme            # start Codex on acme's login
-claude-account handoff codex         # uses the session's account's Codex login when it has one
-claude-account handoff codex --as acme
+hatswap codex-login acme      # sign "acme" in to its Codex (ChatGPT/OpenAI) account
+hatswap codex acme            # start Codex on acme's login
+hatswap handoff codex         # uses the session's account's Codex login when it has one
+hatswap handoff codex --as acme
 ```
 
 Each account's Codex login lives in its own `CODEX_HOME` (`~/.claude-accounts/<name>/codex`). `config.toml`, `AGENTS.md`, prompts, rules, skills and plugins are shared with `~/.codex`; the login, history and sessions are not. `main` uses `~/.codex`. `add acme --codex` signs in to both at once, and `list` shows each account's Codex email.
@@ -253,9 +274,9 @@ Each account's Codex login lives in its own `CODEX_HOME` (`~/.claude-accounts/<n
 **Keep a client's conversations to its own account**
 
 ```sh
-claude-account add acme --private    # new account with its own history and memory
-claude-account private acme          # or convert an existing one
-claude-account private acme --off    # share history again (only while its own history is empty)
+hatswap add acme --private    # new account with its own history and memory
+hatswap private acme          # or convert an existing one
+hatswap private acme --off    # share history again (only while its own history is empty)
 ```
 
 By default every account shares conversation history. A private account keeps its conversations and memory in its own `projects/` folder, so other accounts never read them; settings, skills and MCP servers are still shared. `sessions`, `brief` and `handoff` see private conversations too. When you deliberately hand one to another account, it is copied into that account's history and the command says so.
@@ -263,9 +284,9 @@ By default every account shares conversation history. A private account keeps it
 **Work with saved briefs**
 
 ```sh
-claude-account briefs                          # list, with each brief's goal
-claude-account handoff work --from <file>      # start any account from a saved brief
-claude-account brief --edit                    # write, review and print a brief without switching
+hatswap briefs                          # list, with each brief's goal
+hatswap handoff work --from <file>      # start any account from a saved brief
+hatswap brief --edit                    # write, review and print a brief without switching
 ```
 
 ## Command reference
@@ -276,7 +297,7 @@ claude-account brief --edit                    # write, review and print a brief
 | `private <name> [--off]` | Give an existing account its own history and memory, or share again. |
 | `codex-login <name\|main>` | Sign an account in to its own Codex login. |
 | `codex <name\|main> [codex args…]` | Start Codex on that account's Codex login. |
-| `use <name> [--default] [claude args…]` | Start Claude Code on an account. `claude-account <name>` is equivalent. `--default` also makes it the default. |
+| `use <name> [--default] [claude args…]` | Start Claude Code on an account. `hatswap <name>` is equivalent. `--default` also makes it the default. |
 | `main [claude args…]` | Start Claude Code on the main account (`~/.claude`). |
 | `switch <target> [id] [--default] [--yes]` | Continue a conversation on another account, restarting it in its own tab (tmux, Terminal.app, iTerm2) or resuming it here. |
 | `default [name\|main]` | Show or set the account plain `claude` starts on. |
@@ -295,7 +316,7 @@ claude-account brief --edit                    # write, review and print a brief
 | `brief [id]` | Write and print a brief without switching. |
 | `briefs [n]` | List saved briefs. |
 | `install-command [--force]` | Install or update the `/handoff` and `/switch` commands. `--force` also replaces files it did not write. |
-| `update` | Update claude-account (a clone is updated with `git pull`) and its slash commands. |
+| `update` | Update hatswap (a clone is updated with `git pull`) and its slash commands. |
 
 `<target>` is an account name or `main`. Without an `id`, the most recent conversation in the current folder is used; IDs are listed by `sessions`.
 
@@ -310,7 +331,7 @@ claude-account brief --edit                    # write, review and print a brief
 
 Commands that start Claude Code need a terminal; they will not run through Claude Code's `!` prefix. `switch` is the exception.
 
-When the installed `/handoff` or `/switch` is older than the current templates, `list`, `whoami` and the handoff commands print a one-line note to run `claude-account install-command`.
+When the installed `/handoff` or `/switch` is older than the current templates, `list`, `whoami` and the handoff commands print a one-line note to run `hatswap install-command`.
 
 ## Handoff modes
 
@@ -343,7 +364,7 @@ The receiving agent is told to verify the repository before relying on the brief
 
 **Two ways to write one**
 
-| | `claude-account brief` / `--brief` | `/handoff` inside Claude Code |
+| | `hatswap brief` / `--brief` | `/handoff` inside Claude Code |
 |---|---|---|
 | Written by | a separate `claude -p` call | the running session itself |
 | Input | condensed transcript + repository state | full live context + repository state |
@@ -364,12 +385,12 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 - **Switching.** A running Claude Code process cannot change its login, so `switch` restarts it with `--resume` under the other account. If the session's registry entry names a tmux pane, the restart is scheduled through the tmux server (`respawn-pane`), so it works from inside the session and keeps the pane's original start command. Otherwise the session is asked to exit (`SIGTERM`) and resumed in the terminal that ran `switch`.
 - **Private history.** A private account has a real `projects/` folder instead of the shared symlink, and a `.private` marker so it is never re-linked. Session discovery scans every distinct history folder.
 - **Codex.** Codex reads its login from `$CODEX_HOME`; each account gets `~/.claude-accounts/<name>/codex`, with configuration symlinked from `~/.codex`. The Codex email shown by `list` is read from the login's ID-token claims; tokens are never printed or copied.
-- **Default account and pins.** The default is a name in `~/.claude-accounts/.default`; a pin is a `.claude-account` file holding an account name. The shell hook defines a `claude` function that, on every call, looks for the nearest `.claude-account` from the current folder upwards, falls back to the default, and sets `CLAUDE_CONFIG_DIR` only when it is not already set. It uses shell builtins for the folder walk, so it adds no noticeable start-up time.
+- **Default account and pins.** The default is a name in `~/.claude-accounts/.default`; a pin is a `.hatswap` file holding an account name. The shell hook defines a `claude` function that, on every call, looks for the nearest `.hatswap` from the current folder upwards, falls back to the default, and sets `CLAUDE_CONFIG_DIR` only when it is not already set. It uses shell builtins for the folder walk, so it adds no noticeable start-up time.
 
 ## Security and privacy
 
 - No credentials are read, copied or modified; sign-in is handled entirely by Claude Code.
-- `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` override a login, so they are cleared (with a one-line note) whenever Claude starts on a named account, including through the shell hook. Your shell keeps them, and `main` is left alone. Set `CLAUDE_ACCOUNT_KEEP_AUTH_ENV=1` to keep them.
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` override a login, so they are cleared (with a one-line note) whenever Claude starts on a named account, including through the shell hook. Your shell keeps them, and `main` is left alone. Set `HATSWAP_KEEP_AUTH_ENV=1` to keep them.
 - Before summarisation, labelled passwords, API keys (Anthropic, OpenAI, GitHub, Slack, AWS, Google), JWTs and private keys are replaced with `[redacted]`. Redaction is pattern-based; an unlabelled secret in free text may not be caught.
 - Condensed transcripts are sent only to Claude, through your own Claude Code login.
 - Unless an account is `--private`, `projects/` is shared, so every account can read every conversation. Use private accounts where clients must be kept separate. Settings, `CLAUDE.md`, skills and MCP servers are still shared.
@@ -383,13 +404,22 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 ## Development
 
 ```sh
-bash tests/run.sh                          # 139 tests
+bash tests/run.sh                          # 150 tests
 bash demo/setup.sh && vhs demo/demo.tape   # re-record the demo GIF (requires vhs)
 ```
 
 The test suite is self-contained: a temporary `HOME`, stand-in `claude`, `codex`, `gh`, `tmux`, `osascript`, `curl` and editor executables, and synthetic session files. It never touches your real configuration or credentials. CI runs it on Ubuntu and macOS.
 
 Issues and pull requests are welcome.
+
+## How this differs from other account switchers
+
+Several tools give each Claude Code account its own configuration directory, including an earlier, unrelated project also called [claude-account](https://github.com/hamzarehmandeveloper/claude-account). hatswap starts from the same idea and focuses on moving *work* between accounts:
+
+- moving a live conversation to another account (`switch`), restarting it in the same tab;
+- resuming or forking a conversation on another account, and repository-aware handoff briefs, including to Codex;
+- per-folder accounts (`pin`), a default account, and a separate Codex login per account;
+- shared settings, skills, MCP servers and history by default, with private history per account when you need it.
 
 ## Changelog
 

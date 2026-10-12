@@ -1,0 +1,1450 @@
+#!/usr/bin/env bash
+# hatswap — run several Claude Code accounts side by side and hand work
+# between them (or to Codex) with a short brief. https://github.com/orvi2014/hatswap
+# Each account is its own
+# CLAUDE_CONFIG_DIR, so macOS Keychain keeps a separate login per account.
+# Settings, agents, skills, plugins, memory and session history are shared
+# with ~/.claude by symlink; only the login and ~/.claude.json are per account.
+set -euo pipefail
+
+VERSION=0.5.0
+# hatswap was called claude-account until 0.5.0. The data folder keeps its
+# name because Claude Code keys each account's Keychain login to its path;
+# the old variable and pin-file names are still honoured.
+BASE="${HATSWAP_DIR:-${CLAUDE_ACCOUNTS_DIR:-$HOME/.claude-accounts}}"
+KEEP_AUTH_ENV="${HATSWAP_KEEP_AUTH_ENV:-${CLAUDE_ACCOUNT_KEEP_AUTH_ENV:-}}"
+SWITCH_DELAY="${HATSWAP_SWITCH_DELAY:-${CLAUDE_ACCOUNT_SWITCH_DELAY:-2}}"
+PIN_FILES=(.hatswap .claude-account)
+MAIN="$HOME/.claude"
+SHARED=(settings.json settings.local.json CLAUDE.md agents skills plugins projects commands hooks)
+CODEX_MAIN="$HOME/.codex"
+CODEX_SHARED=(config.toml AGENTS.md prompts rules skills plugins)
+# Bumped whenever the /handoff or /switch templates change.
+COMMANDS_REV=4
+# Credentials in these variables override an account's own login, so they are
+# cleared whenever Claude starts on a named account.
+AUTH_ENV=(ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN)
+REPO_RAW="https://raw.githubusercontent.com/orvi2014/hatswap/main"
+
+usage() {
+  cat <<EOF
+Usage: hatswap <command> [name] [claude args...]
+
+  add <name> [--email you@x.com] [--console] [--private] [--codex]
+                      create an account profile, then sign in to it.
+                      --private keeps its conversation history to itself;
+                      --codex also signs it in to Codex
+  private <name> [--off]
+                      give an existing account its own history (or share again)
+  codex <account|main> [args]
+                      start Codex on that account's Codex login
+  codex-login <name>  sign an account in to Codex (its own CODEX_HOME)
+  use <name> [args]   start Claude with that account (extra args go to claude);
+                      --default also makes it the default for plain 'claude'
+  switch <account|main> [id] [--default]
+                      continue the current conversation on that account. Run
+                      inside Claude (! hatswap switch work, or /switch
+                      work) it restarts the same tab in place when the tab is
+                      in tmux; from another terminal it closes the session
+                      where it is open and resumes it there
+  default [name|main] show or set the account plain 'claude' starts with
+  pin [name|main|--clear]
+                      pin this folder (and everything below it) to an account:
+                      plain 'claude' here starts on it. No argument: show it
+  setup-shell [--remove] [--shell zsh|bash|fish]
+                      add (or remove) the hook that makes plain 'claude'
+                      follow the default, in your shell's startup file
+  shell-init [zsh|bash|fish]
+                      print that hook (setup-shell installs it for you)
+  login <name>        sign in (or re-sign in) to that account
+  list                show profiles and the email each is signed in as
+  whoami              which account this shell (or Claude session) is on, and
+                      which one a new 'claude' starts on
+  remove <name>       delete a profile and its saved login
+  main [args]         start Claude with the main account (~/.claude)
+  sessions [n]        recent conversations in this folder, and which are open
+
+Handoff (default session: the newest one in this folder)
+  handoff <account|main> [id] [--fork]
+                      resume the conversation on another account; refuses
+                      while it is open, --fork continues a copy instead
+  handoff <account|main|codex> [id] --brief
+                      start a FRESH session there from a short brief.
+                      codex uses the session's account's Codex login, if it
+                      has one; --as <account|main> picks another
+  refresh [id]        brief + fresh session on the same account (for a
+                      session that has grown too long)
+  brief [id]          print a brief without switching
+    brief options:    --edit (review in \$EDITOR first)  --model <m>
+                      --no-repo (skip git/PR state)  --from <file> (reuse a
+                      saved brief with handoff or refresh)
+  briefs [n]          list saved briefs
+  install-command [--force]
+                      add /handoff and /switch to Claude Code (updates them if
+                      they are already installed)
+  update              update hatswap (and its slash commands)
+
+Shortcut: hatswap <name> [args] is the same as use <name>; the name
+may also come first (hatswap <name> list|login|remove).
+
+Profiles live in $BASE/<name>. Names: letters, digits, - and _.
+EOF
+}
+
+DEFAULT_FILE="$BASE/.default"
+
+default_name() {
+  local n=""
+  [[ -r "$DEFAULT_FILE" ]] && n="$(tr -d '[:space:]' < "$DEFAULT_FILE")"
+  [[ -n "$n" && -d "$BASE/$n" ]] && echo "$n" || echo main
+}
+
+set_default() {
+  local name="$1"
+  if [[ "$name" == main ]]; then
+    rm -f "$DEFAULT_FILE"
+  else
+    valid "$name"
+    [[ -d "$BASE/$name" ]] || { echo "No profile $name" >&2; exit 1; }
+    mkdir -p "$BASE"; chmod 700 "$BASE"
+    echo "$name" > "$DEFAULT_FILE"
+  fi
+  echo "Default account: $name (new 'claude' sessions start on it)"
+  [[ "$name" == main ]] || ensure_hook
+}
+
+# folder_pin: "<name>\t<file>" for the nearest pin file (.hatswap, or the
+# older .claude-account) at or above $PWD.
+folder_pin() {
+  local d="$PWD" line name f
+  while [[ -n "$d" ]]; do
+    for f in "${PIN_FILES[@]}"; do
+      [[ -r "$d/$f" ]] || continue
+      name=""
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line//[[:space:]]/}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        name="$line"; break
+      done < "$d/$f"
+      printf '%s\t%s\n' "$name" "$d/$f"
+      return 0
+    done
+    d="${d%/*}"
+  done
+  return 1
+}
+
+# new_session_account: "<name>\t<why>" for a plain `claude` started here,
+# with CLAUDE_CONFIG_DIR unset: folder pin, then default, then main.
+new_session_account() {
+  local pin name
+  if pin="$(folder_pin)"; then
+    name="$(cut -f1 <<<"$pin")"
+    if [[ -n "$name" && ( "$name" == main || -d "$BASE/$name" ) ]]; then
+      printf '%s\tpinned by %s\n' "$name" "$(cut -f2 <<<"$pin" | sed "s|^$HOME|~|")"; return
+    fi
+    printf 'main\t%s names unknown account %s\n' "$(cut -f2 <<<"$pin" | sed "s|^$HOME|~|")" "${name:-(empty)}"; return
+  fi
+  name="$(default_name)"
+  [[ "$name" == main ]] && printf 'main\tno pin or default\n' || printf '%s\tdefault\n' "$name"
+}
+
+user_shell() {
+  local sh="${1:-$(basename "${SHELL:-zsh}")}"
+  case "$sh" in zsh|bash|fish) echo "$sh" ;; *) echo "Unsupported shell: $sh (zsh, bash or fish)" >&2; return 1 ;; esac
+}
+
+# Startup file the hook goes in for a shell.
+rc_file() {
+  case "$1" in
+    zsh) echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) [[ "$(uname)" == Darwin ]] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc" ;;
+    fish) echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/hatswap.fish" ;;
+  esac
+}
+
+HOOK_BEGIN="# >>> hatswap >>>"
+HOOK_END="# <<< hatswap <<<"
+
+OLD_HOOK_BEGIN="# >>> claude-account >>>"
+OLD_HOOK_END="# <<< claude-account <<<"
+
+# Startup files that may hold a hook: the current one, plus the pre-rename
+# fish file.
+hook_files() {
+  rc_file "$1"
+  [[ "$1" == fish ]] && echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/claude-account.fish"
+  return 0
+}
+
+hook_installed() {
+  local f
+  while IFS= read -r f; do
+    [[ -f "$f" ]] && grep -qF -e "$HOOK_BEGIN" -e "$OLD_HOOK_BEGIN" "$f" && return 0
+  done < <(hook_files "$1")
+  return 1
+}
+
+install_hook() {
+  local sh="$1" f; f="$(rc_file "$sh")"
+  if hook_installed "$sh"; then echo "Shell hook already in ${f/#$HOME/~}"; return 0; fi
+  mkdir -p "$(dirname "$f")"
+  {
+    [[ -s "$f" ]] && echo
+    echo "$HOOK_BEGIN"
+    if [[ "$sh" == fish ]]; then
+      echo "command -q hatswap; and hatswap shell-init fish | source"
+    else
+      echo "command -v hatswap >/dev/null 2>&1 && eval \"\$(hatswap shell-init $sh)\""
+    fi
+    echo "$HOOK_END"
+  } >> "$f"
+  echo "Added the shell hook to ${f/#$HOME/~}. It applies to new terminals; in this one run: source ${f/#$HOME/~}"
+}
+
+remove_hook() {
+  local sh="$1" f tmp
+  hook_installed "$sh" || { echo "No shell hook in $(rc_file "$sh" | sed "s|^$HOME|~|")"; return 0; }
+  while IFS= read -r f; do
+    [[ -f "$f" ]] && grep -qF -e "$HOOK_BEGIN" -e "$OLD_HOOK_BEGIN" "$f" || continue
+    tmp="$(mktemp)"
+    awk -v b="$HOOK_BEGIN" -v e="$HOOK_END" -v ob="$OLD_HOOK_BEGIN" -v oe="$OLD_HOOK_END" \
+      '$0==b||$0==ob{skip=1; next} $0==e||$0==oe{skip=0; next} !skip' "$f" > "$tmp"
+    cat "$tmp" > "$f"; rm -f "$tmp"
+    [[ "$sh" == fish && ! -s "$f" ]] && rm -f "$f"
+    echo "Removed the shell hook from ${f/#$HOME/~}"
+  done < <(hook_files "$sh")
+}
+
+# After setting a default: offer to install the hook if it is missing.
+ensure_hook() {
+  local sh; sh="$(user_shell 2>/dev/null)" || { echo "Plain 'claude' follows the default only with the shell hook; see: hatswap shell-init" >&2; return 0; }
+  hook_installed "$sh" && return 0
+  if [[ -t 0 && -t 1 ]]; then
+    read -r -p "Plain 'claude' needs a one-line hook in $(rc_file "$sh" | sed "s|^$HOME|~|") to follow the default. Add it? [Y/n] " ok || ok=n
+    [[ "$ok" == n || "$ok" == N ]] || { install_hook "$sh"; return 0; }
+  fi
+  echo "Plain 'claude' follows the default once you run: hatswap setup-shell" >&2
+}
+
+# Shell hook: plain `claude` runs on the default account unless
+# CLAUDE_CONFIG_DIR is already set. The default is read on every call, so
+# changing it needs no reload.
+shell_init() {
+  if [[ "${1:-}" == fish ]]; then
+    cat <<EOF
+function claude --wraps claude
+  if not set -q CLAUDE_CONFIG_DIR
+    set -l _ca_name ""
+    set -l _ca_found 0
+    set -l _ca_d \$PWD
+    while test -n "\$_ca_d"
+      for _ca_f in .hatswap .claude-account
+        if test -r "\$_ca_d/\$_ca_f"
+          set _ca_name (string trim -- (string match -rv '^\\s*(#|\$)' < "\$_ca_d/\$_ca_f")[1])
+          set _ca_found 1
+          break
+        end
+      end
+      test \$_ca_found = 1; and break
+      set _ca_d (string replace -r '/[^/]*\$' '' -- \$_ca_d)
+    end
+    if test \$_ca_found = 0; and test -r "$DEFAULT_FILE"
+      set _ca_name (string trim < "$DEFAULT_FILE")
+    end
+    if test -n "\$_ca_name"; and test "\$_ca_name" != main
+      if test -d "$BASE/\$_ca_name"
+        set -l _ca_unset
+        if test "\$HATSWAP_KEEP_AUTH_ENV" != 1 -a "\$CLAUDE_ACCOUNT_KEEP_AUTH_ENV" != 1
+          for v in ${AUTH_ENV[*]}
+            if set -q \$v; and test -n "\$\$v"
+              echo "hatswap: ignoring \$v so '\$_ca_name' uses its own login (HATSWAP_KEEP_AUTH_ENV=1 keeps it)" >&2
+            end
+            set -a _ca_unset -u \$v
+          end
+        end
+        env \$_ca_unset CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" (command -s claude) \$argv
+        return
+      end
+      echo "hatswap: no account '\$_ca_name'; starting on main" >&2
+    end
+  end
+  command claude \$argv
+end
+EOF
+    return
+  fi
+  cat <<EOF
+claude() {
+  if [ -z "\${CLAUDE_CONFIG_DIR-}" ]; then
+    local _ca_name="" _ca_found=0 _ca_d="\$PWD" _ca_l _ca_f
+    # A .hatswap (or older .claude-account) file here or in a parent pins it.
+    while [ -n "\$_ca_d" ]; do
+      for _ca_f in .hatswap .claude-account; do
+        [ -r "\$_ca_d/\$_ca_f" ] || continue
+        while IFS= read -r _ca_l || [ -n "\$_ca_l" ]; do
+          _ca_l="\${_ca_l//[[:space:]]/}"
+          case "\$_ca_l" in ''|'#'*) continue ;; esac
+          _ca_name="\$_ca_l"; break
+        done < "\$_ca_d/\$_ca_f"
+        _ca_found=1; break
+      done
+      [ "\$_ca_found" = 1 ] && break
+      _ca_d="\${_ca_d%/*}"
+    done
+    if [ "\$_ca_found" = 0 ] && [ -r "$DEFAULT_FILE" ]; then
+      _ca_name="\$(tr -d '[:space:]' < "$DEFAULT_FILE")"
+    fi
+    if [ -n "\$_ca_name" ] && [ "\$_ca_name" != main ]; then
+      if [ -d "$BASE/\$_ca_name" ]; then
+        if [ "\${HATSWAP_KEEP_AUTH_ENV-}" != 1 ] && [ "\${CLAUDE_ACCOUNT_KEEP_AUTH_ENV-}" != 1 ]; then
+          for _ca_l in ${AUTH_ENV[*]}; do
+            if [ -n "\$(printenv "\$_ca_l")" ]; then
+              echo "hatswap: ignoring \$_ca_l so '\$_ca_name' uses its own login (HATSWAP_KEEP_AUTH_ENV=1 keeps it)" >&2
+            fi
+          done
+          (unset ${AUTH_ENV[*]}; CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude "\$@")
+        else
+          CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude "\$@"
+        fi
+        return
+      fi
+      echo "hatswap: no account '\$_ca_name'; starting on main" >&2
+    fi
+  fi
+  command claude "\$@"
+}
+EOF
+}
+
+# live_info <session-id>: "<pid> <tmux pane>" of the Claude process that has
+# it open (pane may be empty), or nothing.
+live_info() {
+  python3 - "$MAIN" "$BASE" "$1" <<'PY'
+import glob, json, os, sys
+main, base, sid = sys.argv[1:4]
+dirs = [main] + [d for d in glob.glob(os.path.join(base, "*")) if os.path.isdir(d)]
+for cfg in dirs:
+    for f in glob.glob(os.path.join(cfg, "sessions", "*.json")):
+        try:
+            s = json.load(open(f))
+            if s.get("sessionId") == sid:
+                os.kill(int(s["pid"]), 0)
+                pane = str(s.get("tmux") or "").rsplit(".", 1)[-1]
+                if not pane.startswith("%"):
+                    pane = os.environ.get("TMUX_PANE", "") if str(s["pid"]) == os.environ.get("CLAUDE_PID") else ""
+                print(s["pid"], pane); sys.exit(0)
+        except Exception:
+            pass
+PY
+}
+
+# is_descendant <pid> <ancestor>
+is_descendant() {
+  local p="$1"
+  while [[ -n "$p" && "$p" != 0 && "$p" != 1 ]]; do
+    [[ "$p" == "$2" ]] && return 0
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+  done
+  return 1
+}
+
+# switch_in_pane <pid> <pane> <session-id> <config dir>: restart the tmux pane
+# that holds the session so it resumes on another account. The restart runs
+# from the tmux server after a short delay, so it works from inside the
+# session itself. Returns 1 when the session is not in a reachable tmux pane.
+switch_in_pane() {
+  local pid="$1" pane="$2" sid="$3" dir="$4" pane_pid start cmd jobs job self go
+  [[ -n "$pane" ]] && command -v tmux >/dev/null || return 1
+  pane_pid="$(tmux display -p -t "$pane" '#{pane_pid}' 2>/dev/null)" || return 1
+  [[ -n "$pane_pid" ]] || return 1
+  [[ "$dir" == "$MAIN" ]] || link_shared "$dir"
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  jobs="$BASE/.jobs"; mkdir -p "$jobs"; chmod 700 "$BASE" "$jobs"
+  job="$(umask 077; mktemp "$jobs/switch-XXXXXX")"
+  go="$job.go"
+  if [[ "$pane_pid" == "$pid" ]]; then
+    # Claude is the pane's own process (Clave and similar): rerun the pane's
+    # start command so its flags, hooks and MCP config are kept.
+    start="$(tmux display -p -t "$pane" '#{pane_start_command}')"
+    if [[ "$start" == *"--session-id $sid"* ]]; then
+      cmd="${start/--session-id $sid/--resume $sid}"
+      local e=() a; while IFS= read -r a; do e+=("$(printf %q "$a")"); done < <(account_env "$dir")
+      cmd="env ${e[*]} $cmd"
+    else
+      cmd="$(printf %q "$self") $(account_label "$dir") --resume $sid"
+    fi
+    printf 'rm -f "$0"\nexec %s\n' "$cmd" > "$job"
+    printf 'sleep %s\ntmux respawn-pane -k -t %q -c %q %q\nrm -f "$0"\n' \
+      "$SWITCH_DELAY" "$pane" "$PWD" "bash $(printf %q "$job")" > "$go"
+  elif is_descendant "$pid" "$pane_pid"; then
+    # Claude runs under a shell in the pane: stop it, then type the resume
+    # command into that shell.
+    rm -f "$job"
+    cmd="$(printf %q "$self") $(account_label "$dir") --resume $sid"
+    printf 'sleep %s\nkill -TERM %s\nfor i in $(seq 1 50); do kill -0 %s 2>/dev/null || break; sleep 0.2; done\ntmux send-keys -t %q -l %q\ntmux send-keys -t %q Enter\nrm -f "$0"\n' \
+      "$SWITCH_DELAY" "$pid" "$pid" "$pane" "$cmd" "$pane" > "$go"
+  else
+    rm -f "$job"; return 1
+  fi
+  tmux run-shell -b "bash $(printf %q "$go")" || { rm -f "$job" "$go"; return 1; }
+}
+
+# AppleScript that finds the Terminal.app or iTerm2 tab on a tty and, in
+# "type" mode, types a command into it. Prints "ok" when the tab was found.
+TERMINAL_SCRIPT='on run argv
+  set t to item 1 of argv
+  set m to item 2 of argv
+  set c to item 3 of argv
+  if application "iTerm2" is running then
+    tell application "iTerm2"
+      repeat with w in windows
+        repeat with tb in tabs of w
+          repeat with s in sessions of tb
+            if tty of s is t then
+              if m is "type" then tell s to write text c
+              return "ok"
+            end if
+          end repeat
+        end repeat
+      end repeat
+    end tell
+  end if
+  if application "Terminal" is running then
+    tell application "Terminal"
+      repeat with w in windows
+        repeat with tb in tabs of w
+          if tty of tb is t then
+            if m is "type" then do script c in tb
+            return "ok"
+          end if
+        end repeat
+      end repeat
+    end tell
+  end if
+  return "no"
+end run'
+
+# switch_in_terminal <pid> <session-id> <config dir>: on macOS, when Claude
+# runs under a shell in a Terminal.app or iTerm2 tab, stop it and type the
+# resume command into that same tab. Detached, so it works from inside the
+# session. Returns 1 when that is not possible.
+switch_in_terminal() {
+  local pid="$1" sid="$2" dir="$3" tty parent pcomm self cmd jobs go
+  [[ "$(uname)" == Darwin ]] && command -v osascript >/dev/null || return 1
+  tty="$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')"
+  [[ -n "$tty" && "$tty" != "??" ]] || return 1
+  tty="/dev/${tty#/dev/}"
+  parent="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+  pcomm="$(basename "$(ps -o comm= -p "$parent" 2>/dev/null | tr -d ' ')")"
+  case "${pcomm#-}" in zsh|bash|fish|sh) ;; *) return 1 ;; esac
+  [[ "$(osascript -e "$TERMINAL_SCRIPT" "$tty" find "" 2>/dev/null)" == ok ]] || return 1
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  cmd="$(printf %q "$self") $(account_label "$dir") --resume $sid"
+  jobs="$BASE/.jobs"; mkdir -p "$jobs"; chmod 700 "$BASE" "$jobs"
+  go="$(umask 077; mktemp "$jobs/switch-XXXXXX")"
+  {
+    printf 'sleep %s\n' "$SWITCH_DELAY"
+    printf 'kill -TERM %s\nfor i in $(seq 1 50); do kill -0 %s 2>/dev/null || break; sleep 0.2; done\n' "$pid" "$pid"
+    printf 'osascript -e %q %q type %q >/dev/null\n' "$TERMINAL_SCRIPT" "$tty" "$cmd"
+    printf 'rm -f "$0"\n'
+  } > "$go"
+  # New session, so it survives Claude exiting and taking its children along.
+  nohup python3 -c 'import os, sys; os.setsid(); os.execvp("bash", ["bash", sys.argv[1]])' "$go" >/dev/null 2>&1 &
+  return 0
+}
+
+# stop_session <pid>: ask Claude to exit (SIGTERM) and wait for it.
+stop_session() {
+  local pid="$1" i
+  # Never stop a Claude we are running inside.
+  if is_descendant $$ "$pid"; then
+    echo "This terminal cannot be restarted from inside (supported: tmux, Terminal.app, iTerm2). Type /exit, then run: hatswap switch $to" >&2
+    exit 1
+  fi
+  kill -TERM "$pid" 2>/dev/null || return 0
+  for i in $(seq 1 50); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.2
+  done
+  echo "Session (pid $pid) did not exit; close it with /exit and run this again." >&2
+  exit 1
+}
+
+valid() { [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Bad name: $1" >&2; exit 1; }; }
+dir_of() { echo "$BASE/$1"; }
+
+email_of() {
+  local cfg="$1/.claude.json"
+  [[ -f "$cfg" ]] || { echo "(not signed in)"; return; }
+  python3 - "$cfg" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print((d.get("oauthAccount") or {}).get("emailAddress") or "(not signed in)")
+except Exception:
+    print("(unreadable)")
+PY
+}
+
+is_private() { [[ "$1" != "$MAIN" && -e "$1/.private" ]]; }
+
+link_shared() {
+  local dir="$1" item
+  for item in "${SHARED[@]}"; do
+    [[ "$item" == projects ]] && is_private "$dir" && continue
+    [[ -e "$MAIN/$item" ]] || continue
+    [[ -e "$dir/$item" || -L "$dir/$item" ]] && continue
+    ln -s "$MAIN/$item" "$dir/$item"
+  done
+}
+
+copy_mcp_servers() {
+  local dir="$1"
+  [[ -f "$HOME/.claude.json" && ! -f "$dir/.claude.json" ]] || return 0
+  python3 - "$HOME/.claude.json" "$dir/.claude.json" <<'PY'
+import json, os, sys
+src = json.load(open(sys.argv[1]))
+out = {"mcpServers": src.get("mcpServers", {}), "hasCompletedOnboarding": True}
+fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(out, f, indent=2)
+PY
+}
+
+# make_private <config dir>: its own projects/ (history and memory).
+make_private() {
+  local dir="$1"
+  if [[ -L "$dir/projects" ]]; then rm "$dir/projects"; fi
+  mkdir -p "$dir/projects"; chmod 700 "$dir/projects"
+  touch "$dir/.private"
+}
+
+make_shared() {
+  local dir="$1"
+  if [[ -d "$dir/projects" && ! -L "$dir/projects" ]]; then
+    if [[ -n "$(ls -A "$dir/projects")" ]]; then
+      echo "$(basename "$dir") has its own history in $dir/projects. Move or delete it first." >&2
+      exit 1
+    fi
+    rmdir "$dir/projects"
+  fi
+  rm -f "$dir/.private"
+  link_shared "$dir"
+}
+
+codex_home_of() {
+  [[ "$1" == "$MAIN" ]] && echo "$CODEX_MAIN" || echo "$1/codex"
+}
+
+codex_signed_in() { [[ -s "$(codex_home_of "$1")/auth.json" ]]; }
+
+# Email of a Codex login, read from the ID token's claims (no token printed).
+codex_email() {
+  local auth="$1/auth.json"
+  [[ -s "$auth" ]] || { echo "(not signed in)"; return; }
+  python3 - "$auth" <<'PY'
+import base64, json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    tok = (d.get("tokens") or {}).get("id_token") or ""
+    if tok.count(".") == 2:
+        part = tok.split(".")[1]
+        part += "=" * (-len(part) % 4)
+        email = json.loads(base64.urlsafe_b64decode(part)).get("email")
+        if email:
+            print(email); sys.exit(0)
+    print("(API key)" if d.get("OPENAI_API_KEY") else "(signed in)")
+except Exception:
+    print("(unreadable)")
+PY
+}
+
+link_codex_shared() {
+  local home="$1" item
+  for item in "${CODEX_SHARED[@]}"; do
+    [[ -e "$CODEX_MAIN/$item" ]] || continue
+    [[ -e "$home/$item" || -L "$home/$item" ]] && continue
+    ln -s "$CODEX_MAIN/$item" "$home/$item"
+  done
+}
+
+codex_login() {
+  local dir="$1"; shift
+  local home; home="$(codex_home_of "$dir")"
+  command -v codex >/dev/null || { echo "codex is not installed" >&2; exit 1; }
+  if [[ "$dir" != "$MAIN" ]]; then
+    mkdir -p "$home"; chmod 700 "$home"; link_codex_shared "$home"
+  fi
+  echo "Sign in to the Codex (ChatGPT/OpenAI) account for $(account_label "$dir") in the browser window."
+  if [[ "$dir" == "$MAIN" ]]; then env -u CODEX_HOME codex login "$@"; else CODEX_HOME="$home" codex login "$@"; fi
+}
+
+# codex_run <claude config dir> <args...>: exec Codex on that account's login.
+codex_run() {
+  local dir="$1"; shift
+  local home; home="$(codex_home_of "$dir")"
+  command -v codex >/dev/null || { echo "codex is not installed" >&2; exit 1; }
+  need_tty
+  if [[ "$dir" == "$MAIN" ]]; then exec env -u CODEX_HOME codex "$@"; fi
+  link_codex_shared "$home"
+  CODEX_HOME="$home" exec codex "$@"
+}
+
+# Slash commands we installed that predate the current templates.
+stale_commands() {
+  local f out=()
+  for f in handoff switch; do
+    [[ -f "$MAIN/commands/$f.md" ]] || continue
+    grep -q -e "hatswap" -e "claude-account" "$MAIN/commands/$f.md" || continue
+    grep -qF "<!-- hatswap-commands: $COMMANDS_REV -->" "$MAIN/commands/$f.md" || out+=("/$f")
+  done
+  [[ -f "$MAIN/commands/handoff.md" && ! -f "$MAIN/commands/switch.md" ]] && grep -q -e "hatswap" -e "claude-account" "$MAIN/commands/handoff.md" && out+=("/switch (missing)")
+  echo "${out[*]-}"
+}
+
+warn_stale_commands() {
+  local s; s="$(stale_commands)"
+  [[ -n "$s" ]] && echo "Note: your Claude Code commands are out of date ($s). Update with: hatswap install-command" >&2
+  return 0
+}
+
+# auth_env_unset <account label>: print "-u VAR" args for env(1), and say so
+# once on stderr, unless HATSWAP_KEEP_AUTH_ENV=1.
+auth_env_unset() {
+  [[ "$KEEP_AUTH_ENV" == 1 ]] && return 0
+  local v set=()
+  for v in "${AUTH_ENV[@]}"; do
+    [[ -n "${!v:-}" ]] && set+=("$v")
+    printf -- '-u\n%s\n' "$v"
+  done
+  [[ ${#set[@]} -gt 0 ]] && echo "hatswap: ignoring ${set[*]} so '$1' uses its own login (HATSWAP_KEEP_AUTH_ENV=1 keeps it)" >&2
+  return 0
+}
+
+# account_env <config dir>: env(1) arguments that start Claude on that account.
+account_env() {
+  local dir="$1" a
+  if [[ "$dir" == "$MAIN" ]]; then printf -- '-u\nCLAUDE_CONFIG_DIR\n'; return; fi
+  while IFS= read -r a; do printf '%s\n' "$a"; done < <(auth_env_unset "$(account_label "$dir")")
+  printf 'CLAUDE_CONFIG_DIR=%s\n' "$dir"
+}
+
+need_tty() {
+  [[ -t 0 && -t 1 ]] && return 0
+  echo "This opens an interactive Claude session; run it in a normal terminal tab (not with ! inside Claude)." >&2
+  exit 1
+}
+
+# claude_as <config-dir> <args...>: the default account must run with
+# CLAUDE_CONFIG_DIR unset (its config is ~/.claude.json, outside ~/.claude).
+claude_as() {
+  local dir="$1"; shift
+  local e=(); while IFS= read -r a; do e+=("$a"); done < <(account_env "$dir")
+  env "${e[@]}" claude "$@"
+}
+
+run() {
+  local dir="$1"; shift
+  [[ "$dir" == "$MAIN" ]] || link_shared "$dir"
+  need_tty
+  local e=(); while IFS= read -r a; do e+=("$a"); done < <(account_env "$dir")
+  exec env "${e[@]}" claude "$@"
+}
+
+config_dir_of() {
+  if [[ "$1" == main ]]; then echo "$MAIN"; else valid "$1"; echo "$(dir_of "$1")"; fi
+}
+
+# Prints: <live|closed> <account> <sessionId> <updated> <title> <history>,
+# newest first, for conversations started in the current folder. <history> is
+# "main" for the shared history, or the name of a private account.
+session_table() {
+  python3 - "$MAIN" "$BASE" "$PWD" "${1:-15}" <<'PY'
+import glob, json, os, re, sys, time
+main, base, cwd, limit = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+registries = {"main": main}
+for d in sorted(glob.glob(os.path.join(base, "*"))):
+    if os.path.isdir(d):
+        registries[os.path.basename(d)] = d
+roots, seen = [], set()
+for account, cfg in registries.items():
+    r = os.path.realpath(os.path.join(cfg, "projects"))
+    if r in seen or not os.path.isdir(r):
+        continue
+    seen.add(r)
+    roots.append(("main" if r == os.path.realpath(os.path.join(main, "projects")) else account, r))
+live = {}
+for account, cfg in registries.items():
+    for f in glob.glob(os.path.join(cfg, "sessions", "*.json")):
+        try:
+            s = json.load(open(f))
+            os.kill(int(s["pid"]), 0)
+        except Exception:
+            continue
+        live[s.get("sessionId")] = account
+munged = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+found = []
+for label, r in roots:
+    found += [(f, label) for f in glob.glob(os.path.join(r, munged, "*.jsonl"))]
+found = sorted(found, key=lambda x: os.path.getmtime(x[0]), reverse=True)
+uniq, sids = [], set()
+for f, home in found:
+    if os.path.basename(f) not in sids:
+        sids.add(os.path.basename(f)); uniq.append((f, home))
+for f, home in uniq[:limit]:
+    sid = os.path.basename(f)[:-6]
+    title = ""
+    try:
+        with open(f) as fh:
+            for line in fh:
+                if '"type":"user"' not in line and '"type": "user"' not in line:
+                    continue
+                m = json.loads(line).get("message", {}).get("content")
+                if isinstance(m, list):
+                    m = next((c.get("text") for c in m if isinstance(c, dict) and c.get("type") == "text"), "")
+                if isinstance(m, str) and m.strip() and not m.lstrip().startswith("<"):
+                    title = " ".join(m.split())[:60]
+                    break
+    except Exception:
+        pass
+    state = "live" if sid in live else "closed"
+    who = live.get(sid, "-")
+    stamp = time.strftime("%m-%d %H:%M", time.localtime(os.path.getmtime(f)))
+    print(f"{state}\t{who}\t{sid}\t{stamp}\t{title}\t{home}")
+PY
+}
+
+cmd="${1:-}"; shift || true
+if [[ -n "$cmd" && "$cmd" =~ ^[A-Za-z0-9_-]+$ && -d "$BASE/$cmd" ]]; then
+  case "${1:-}" in
+    list) cmd=list; shift ;;
+    use|login|remove|switch|private|codex-login) next="$1"; shift; set -- "$cmd" "$@"; cmd="$next" ;;
+    *) set -- "$cmd" "$@"; cmd=use ;;
+  esac
+fi
+BRIEF_PROMPT='You are writing a handoff brief so a fresh coding agent, with no access to the conversation below, can continue the work. The conversation is a condensed transcript of a coding session (tool calls are summarised; outputs mostly omitted). Write Markdown with exactly these sections:
+
+# Handoff brief
+## Goal
+What the user ultimately wants, in their words where possible.
+## Done (verified)
+Finished work with evidence: PRs, commits, deploys, test results. Only what the transcript shows actually happened.
+## In flight
+The exact step that was in progress when the session stopped, and its state.
+## Decisions and constraints
+Choices the user made, rules they set, things not to do. Quote the user for anything strict.
+## Tried and rejected
+Approaches, fixes or ideas that were tried or considered and abandoned, each with the reason (error, failing test, user said no, too slow), so the next agent does not repeat them. Write "None" if the transcript shows none.
+## Key pointers
+Repos, branches, files, commands, URLs, IDs the next agent needs. Paths and names, not contents.
+## Open questions / blockers
+Anything waiting on the user or failing.
+## Next step
+One or two concrete actions to take first.
+
+If a CURRENT REPOSITORY STATE block is present it was collected at handoff time and is ground truth for the branch, uncommitted work, commits and open pull requests: use it to correct the transcript, and reflect it in In flight and Key pointers. Rules: the transcript is chronological and the summary can be stale, so later messages override it; state a status only if the transcript shows it; be specific and terse; never invent facts, names, versions, PR numbers or results, and if something is not in the transcript, leave it out or say unknown; never include passwords, API keys or tokens even if they appear in the transcript; write it for an agent, not a human reader.'
+
+# Condensed transcript of a session file: starts at the latest compaction
+# summary, then user text, assistant text and one-line tool calls.
+condense_session() {
+  python3 - "$1" "${2:-120000}" "${3:-60000}" <<'PY'
+import json, re, sys
+path, limit, tail_budget = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+rows = []
+for line in open(path, errors="replace"):
+    try:
+        rows.append(json.loads(line))
+    except Exception:
+        pass
+by_uuid = {d["uuid"]: d for d in rows if d.get("uuid")}
+
+def walk_back(uuid):
+    out, seen = [], set()
+    while uuid and uuid in by_uuid and uuid not in seen:
+        seen.add(uuid)
+        d = by_uuid[uuid]
+        out.append(d)
+        uuid = d.get("parentUuid")
+    out.reverse()
+    return out
+
+leaf = next((d for d in reversed(rows)
+             if d.get("type") in ("user", "assistant") and not d.get("isSidechain") and d.get("uuid")), None)
+chain = walk_back(leaf["uuid"]) if leaf else rows
+boundary = next((d for d in chain if d.get("subtype") == "compact_boundary"), None)
+kept = []
+if boundary and boundary.get("logicalParentUuid"):
+    kept = [d for d in walk_back(boundary["logicalParentUuid"]) if d.get("type") in ("user", "assistant")]
+
+TAG = re.compile(r"<(system-reminder|local-command-caveat|command-name|command-message|command-args|bash-stdout|bash-stderr)>.*?</\1>", re.S)
+
+SECRETS = [
+    (re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[redacted-jwt]"),
+    (re.compile(r"\b(sk-(?:ant-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})"), "[redacted-key]"),
+    (re.compile(r"(?i)\b(password|passwd|pwd|secret|api[_-]?key|token)(\s*[:=]\s*|\s+)(\S{4,})"), r"\1\2[redacted]"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[redacted-private-key]"),
+]
+
+def redact(t):
+    for rx, rep in SECRETS:
+        t = rx.sub(rep, t)
+    return t
+
+def clean(t):
+    return redact(TAG.sub("", t or "").strip())
+
+def tool_line(c):
+    name = c.get("name", "?")
+    inp = c.get("input") or {}
+    for key in ("command", "file_path", "url", "query", "pattern", "description", "prompt"):
+        if isinstance(inp.get(key), str) and inp[key].strip():
+            return f"[tool {name}] {redact(' '.join(inp[key].split()))[:220]}"
+    return f"[tool {name}]"
+
+def render(d):
+    t = d.get("type")
+    if d.get("isSidechain") or t not in ("user", "assistant"):
+        return []
+    content = (d.get("message") or {}).get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    lines = []
+    for c in content or []:
+        if not isinstance(c, dict):
+            continue
+        k = c.get("type")
+        if k == "text":
+            txt = clean(c.get("text"))
+            if not txt:
+                continue
+            if d.get("isCompactSummary"):
+                lines.append("=== SUMMARY OF EARLIER CONVERSATION (may be stale; later messages win) ===\n" + txt + "\n=== END SUMMARY ===")
+            elif t == "user":
+                lines.append("USER: " + txt[:4000])
+            else:
+                lines.append("ASSISTANT: " + txt[:1500])
+        elif k == "tool_use":
+            lines.append(tool_line(c))
+        elif k == "tool_result" and c.get("is_error"):
+            body = c.get("content")
+            if isinstance(body, list):
+                body = " ".join(x.get("text", "") for x in body if isinstance(x, dict))
+            lines.append("[tool error] " + redact(" ".join(str(body or "").split()))[:300])
+    return lines
+
+title = next((d["aiTitle"] for d in reversed(rows) if d.get("type") == "ai-title" and d.get("aiTitle")), None)
+prs = list(dict.fromkeys(str(d.get("prUrl") or d.get("prNumber")) for d in rows if d.get("type") == "pr-link" and d.get("prNumber")))
+
+summary_lines, after_lines = [], []
+seen_summary = False
+for d in chain:
+    r = render(d)
+    if d.get("isCompactSummary"):
+        summary_lines += r
+        seen_summary = True
+    elif seen_summary or not boundary:
+        after_lines += r
+
+kept_lines = []
+for d in reversed(kept):
+    r = render(d)
+    if sum(len(x) for x in kept_lines) + sum(len(x) for x in r) > tail_budget:
+        break
+    kept_lines = r + kept_lines
+
+head = []
+if title:
+    head.append(f"Session title: {title}")
+if prs:
+    head.append("PRs linked in session (oldest first): " + ", ".join(prs))
+parts = head + summary_lines
+if kept_lines:
+    parts += ["=== MOST RECENT MESSAGES BEFORE THE SUMMARY WAS WRITTEN (newer than the summary) ==="] + kept_lines + ["=== CONVERSATION CONTINUES ==="]
+parts += after_lines
+text = "\n".join(parts)
+if len(text) > limit:
+    fixed = "\n".join(head + summary_lines)
+    budget = max(limit - len(fixed) - 100, limit // 2)
+    rest = "\n".join(parts[len(head) + len(summary_lines):])
+    text = fixed + "\n[... older part omitted ...]\n" + rest[-budget:]
+print(text)
+PY
+}
+
+session_file() {
+  python3 - "$MAIN" "$BASE" "$PWD" "$1" <<'PY'
+import glob, os, re, sys
+main, base, cwd, sid = sys.argv[1:5]
+munged = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+for cfg in [main] + sorted(glob.glob(os.path.join(base, "*"))):
+    p = os.path.join(cfg, "projects", munged, sid + ".jsonl")
+    if os.path.exists(p):
+        print(p); break
+PY
+}
+
+# ensure_transcript <session-id> <target config dir>: make the conversation
+# resumable on the target. Accounts with private history have their own
+# projects/, so the transcript is copied across (and said so).
+ensure_transcript() {
+  local sid="$1" dir="$2" src dest
+  src="$(session_file "$sid")"
+  [[ -n "$src" ]] || return 0
+  # A shared account must point at the shared history before we compare.
+  [[ "$dir" == "$MAIN" ]] || { mkdir -p "$MAIN/projects"; link_shared "$dir"; }
+  dest="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$dir/projects")/$(basename "$(dirname "$src")")"
+  [[ "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$(dirname "$src")")" == "$dest" ]] && return 0
+  [[ -e "$dest/$sid.jsonl" ]] && return 0
+  mkdir -p "$dest"
+  cp -p "$src" "$dest/"
+  [[ -d "$(dirname "$src")/$sid" ]] && cp -Rp "$(dirname "$src")/$sid" "$dest/"
+  echo "Copied this conversation into $(account_label "$dir")'s history so it can resume there." >&2
+}
+
+# write_brief <session-id> <config-dir-to-bill> [model] -> prints brief path
+# Facts about the repository in $PWD at handoff time (git, and open PRs via gh).
+repo_facts() {
+  python3 - "$PWD" <<'PY'
+import json, shutil, subprocess, sys
+cwd = sys.argv[1]
+def run(cmd, timeout=8):
+    try:
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:
+        return None
+if run(["git", "rev-parse", "--is-inside-work-tree"]) != "true":
+    sys.exit(0)
+out = ["=== CURRENT REPOSITORY STATE (collected at handoff time; newer than the transcript) ==="]
+out.append("Branch: " + (run(["git", "branch", "--show-current"]) or run(["git", "rev-parse", "--short", "HEAD"]) or "unknown"))
+ab = run(["git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD"])
+if ab and len(ab.split()) == 2:
+    behind, ahead = ab.split()
+    out.append(f"Upstream: {ahead} ahead, {behind} behind")
+status = (run(["git", "status", "--short"]) or "").splitlines()
+out.append("Uncommitted changes: " + (f"{len(status)} paths" if status else "none"))
+out += ["  " + line for line in status[:25]]
+if len(status) > 25:
+    out.append(f"  ... {len(status) - 25} more")
+log = (run(["git", "log", "--oneline", "-8"]) or "").splitlines()
+if log:
+    out.append("Recent commits:")
+    out += ["  " + line for line in log]
+if shutil.which("gh"):
+    prs = run(["gh", "pr", "list", "--author", "@me", "--state", "open", "--limit", "10",
+               "--json", "number,title,headRefName,url"], timeout=12)
+    try:
+        prs = json.loads(prs) if prs else None
+    except Exception:
+        prs = None
+    if prs is not None:
+        out.append("Your open pull requests: " + ("none" if not prs else ""))
+        out += [f"  #{p['number']} {p['title']} ({p['headRefName']}) {p['url']}" for p in prs]
+print("\n".join(out))
+PY
+}
+
+briefs_dir() {
+  mkdir -p "$BASE/.briefs"; chmod 700 "$BASE" "$BASE/.briefs"
+  echo "$BASE/.briefs"
+}
+
+# new_brief_path <tag>: a unique, private, empty .md file in the briefs dir
+new_brief_path() {
+  local dir f
+  dir="$(briefs_dir)"
+  f="$(umask 077; mktemp "$dir/$(date +%Y%m%d-%H%M%S)-$1-XXXXXX")" || return 1
+  mv "$f" "$f.md" && echo "$f.md"
+}
+
+# write_brief <session-id> <config-dir-to-bill> -> prints brief path.
+# Honours BRIEF_MODEL and BRIEF_REPO (1 = append repository state).
+write_brief() {
+  local sid="$1" bill="$2" model="${BRIEF_MODEL:-sonnet}" file out dir
+  file="$(session_file "$sid")"
+  [[ -n "$file" ]] || { echo "Session $sid not found for $PWD" >&2; return 1; }
+  dir="$(briefs_dir)"
+  out="$(new_brief_path "${sid:0:8}")" || return 1
+  echo "Writing handoff brief for $sid (model: $model)..." >&2
+  local cwd="$PWD" err
+  err="$(mktemp)"
+  ( umask 077
+    condense_session "$file" > "$out.in"
+    [[ "${BRIEF_REPO:-1}" == 1 ]] && repo_facts >> "$out.in"
+    cd "$dir" &&
+      claude_as "$bill" -p --model "$model" --system-prompt "$BRIEF_PROMPT" \
+        --tools "" --strict-mcp-config --setting-sources "" \
+        "Write the handoff brief for the session transcript on stdin. The session ran in: $cwd" \
+        < "$out.in" > "$out" 2> "$err" ) || {
+    echo "Brief generation failed:" >&2; tail -5 "$err" >&2; rm -f "$out" "$out.in" "$err"; return 1; }
+  rm -f "$out.in" "$err"
+  [[ -s "$out" ]] || { echo "Brief came back empty" >&2; rm -f "$out"; return 1; }
+  echo "$out"
+}
+
+edit_brief() {
+  need_tty
+  ${VISUAL:-${EDITOR:-vi}} "$1" < /dev/tty > /dev/tty
+  [[ -s "$1" ]] || { echo "Brief is empty after editing; stopping." >&2; exit 1; }
+}
+
+# Config dir of the account that owns a session: where it is open, else the
+# account this shell is running under, else main.
+owner_dir() {
+  local owner="$1"
+  if [[ -n "$owner" && "$owner" != "-" ]]; then
+    [[ "$owner" == main ]] && echo "$MAIN" || echo "$BASE/$owner"
+  elif [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+    echo "$CLAUDE_CONFIG_DIR"
+  else
+    local n; n="$(new_session_account | cut -f1)"
+    [[ "$n" == main ]] && echo "$MAIN" || echo "$BASE/$n"
+  fi
+}
+
+account_label() {
+  [[ "$1" == "$MAIN" ]] && echo main || basename "$1"
+}
+
+# start_from_brief <target: config dir or "codex"> <brief file>
+start_from_brief() {
+  local target="$1" file="$2"
+  need_tty
+  [[ -s "$file" ]] || { echo "Brief not found or empty: $file" >&2; exit 1; }
+  if [[ "$target" == codex ]]; then
+    local cdir="${CODEX_ACCOUNT_DIR:-$MAIN}"
+    local ce; ce="$(codex_email "$(codex_home_of "$cdir")")"
+    [[ "$ce" == \(* ]] || ce="($ce)"
+    echo "Codex account: $(account_label "$cdir") $ce"
+    codex_run "$cdir" "$(seed_prompt "$file")"
+  fi
+  run "$target" "$(seed_prompt "$file")"
+}
+
+install_command() {
+  local force="$1" dest="$MAIN/commands/handoff.md" sw="$MAIN/commands/switch.md" f
+  mkdir -p "$MAIN/commands"
+  for f in "$dest" "$sw"; do
+    if [[ -e "$f" && "$force" != 1 ]] && ! grep -q -e "hatswap" -e "claude-account" "$f"; then
+      echo "$f exists and was not written by hatswap; add --force to replace it" >&2; exit 1
+    fi
+  done
+  cat > "$sw" <<'CMD'
+---
+description: Continue this conversation on another Claude account (hatswap)
+argument-hint: "<account | main> [--default]"
+---
+
+Run exactly this one command with the Bash tool, and nothing else:
+
+```
+hatswap switch $ARGUMENTS
+```
+
+Then reply with its output in one short line. If it says this tab restarts, add nothing more.
+CMD
+  echo "<!-- hatswap-commands: $COMMANDS_REV -->" >> "$sw"
+  cat > "$dest" <<'CMD'
+---
+description: Write a handoff brief of this session, then continue it on another account, in a fresh session, or in Codex
+argument-hint: "[account | main | codex]"
+---
+
+Write a handoff brief so a fresh agent, with no access to this conversation, can continue the work.
+
+First check the current repository state and treat it as ground truth: `git status --short`, `git branch --show-current`, `git log --oneline -8`, and `gh pr list --author @me --state open` if `gh` is available.
+
+Use exactly these Markdown sections:
+
+# Handoff brief
+## Goal
+## Done (verified)
+## In flight
+## Decisions and constraints
+## Tried and rejected
+## Key pointers
+## Open questions / blockers
+## Next step
+
+Under "Tried and rejected", list approaches that were tried or considered and abandoned, each with why (the error, the failing test, the user's objection), so the next agent does not repeat them; write "None" if there were none.
+
+Be specific and terse. Only state what actually happened in this session or what the repository shows. Quote the user for strict rules. Never include passwords, API keys or tokens.
+
+Save it by running this command, with the brief as the heredoc body:
+
+```
+hatswap save-brief <<'BRIEF'
+...the brief...
+BRIEF
+```
+
+It prints the saved path. Then reply with one short message containing:
+- the saved path;
+- the command to continue, to be run in a normal terminal tab: `hatswap handoff $ARGUMENTS --from <path>`, or, if no account was given, `hatswap refresh --from <path>` (a fresh session on this account);
+- a note that they can /exit this window first.
+CMD
+  echo "<!-- hatswap-commands: $COMMANDS_REV -->" >> "$dest"
+  echo "Installed /handoff at $dest and /switch at $sw"
+  echo "In Claude Code: /handoff work (or /handoff codex, or just /handoff); /switch work"
+}
+
+seed_prompt() {
+  printf 'You are taking over a coding task from another agent session. Their handoff brief is below. Read it, check the current state of the repo before trusting it (git status, the files and PRs it names), then continue from "Next step". Confirm with the user before anything destructive or outward-facing.\n\n%s\n' "$(cat "$1")"
+}
+
+pick_session() {
+  local sid="$1" row
+  if [[ -z "$sid" ]]; then
+    sid="$(session_table 1 | cut -f3)"
+    [[ -n "$sid" ]] || { echo "No conversations found for $PWD. cd to the folder the session ran in." >&2; return 1; }
+  fi
+  row="$(session_table 200 | awk -F'\t' -v s="$sid" '$3==s')"
+  [[ -n "$row" ]] || { echo "Session $sid was not started in $PWD. cd to its folder or run: hatswap sessions" >&2; return 1; }
+  printf '%s\n' "$row"
+}
+
+case "$cmd" in
+  add)
+    name="${1:?name required}"; valid "$name"
+    case "$name" in main|hatswap|codex|codex-login|private|update|pin|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
+      echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
+    dir="$(dir_of "$name")"
+    [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
+    private=0; with_codex=0; args=()
+    for a in "${@:2}"; do
+      case "$a" in --private) private=1 ;; --codex) with_codex=1 ;; *) args+=("$a") ;; esac
+    done
+    mkdir -p "$dir"; chmod 700 "$BASE" "$dir"
+    [[ "$private" == 1 ]] && make_private "$dir"
+    link_shared "$dir"; copy_mcp_servers "$dir"
+    echo "Created $name$( [[ "$private" == 1 ]] && echo " (private history)"). Sign in to the other Claude account in the browser window."
+    CLAUDE_CONFIG_DIR="$dir" claude auth login ${args[@]+"${args[@]}"}
+    [[ "$with_codex" == 1 ]] && codex_login "$dir"
+    echo "Done. Start it with: hatswap use $name"
+    ;;
+  sessions)
+    printf "%-7s %-10s %-36s %-11s %s\n" STATE "OPEN IN" SESSION UPDATED "FIRST MESSAGE"
+    session_table "${1:-15}" | while IFS=$'\t' read -r st who sid stamp title; do
+      printf "%-7s %-10s %-36s %-11s %s\n" "$st" "$who" "$sid" "$stamp" "$title"
+    done
+    ;;
+  brief)
+    sid=""; edit=0; BRIEF_MODEL=sonnet; BRIEF_REPO=1
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --model) BRIEF_MODEL="${2:?}"; shift 2 ;;
+        --no-repo) BRIEF_REPO=0; shift ;;
+        --edit) edit=1; shift ;;
+        *) sid="$1"; shift ;;
+      esac
+    done
+    row="$(pick_session "$sid")" || exit 1
+    sid="$(cut -f3 <<<"$row")"
+    out="$(write_brief "$sid" "$(owner_dir "$(cut -f2 <<<"$row")")")" || exit 1
+    [[ "$edit" == 1 ]] && edit_brief "$out"
+    cat "$out"
+    echo >&2; echo "Saved: ${out/#$HOME/~}" >&2
+    ;;
+  briefs)
+    dir="$(briefs_dir)"
+    found=0
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      found=1
+      goal="$(awk '/^## Goal/{getline; while ($0 ~ /^[[:space:]]*$/) getline; print; exit}' "$f" | cut -c1-70)"
+      printf "%s  %s\n" "$f" "$goal"
+    done < <(ls -t "$dir"/*.md 2>/dev/null | head -"${1:-15}")
+    [[ "$found" == 1 ]] || echo "No briefs yet."
+    ;;
+  save-brief)
+    out="$(new_brief_path inline)" || exit 1
+    cat > "$out"
+    [[ -s "$out" ]] || { rm -f "$out"; echo "Nothing on stdin" >&2; exit 1; }
+    echo "$out"
+    ;;
+  install-command)
+    install_command "$([[ "${1:-}" == --force ]] && echo 1)"
+    ;;
+  refresh|handoff|switch)
+    if [[ "$cmd" == switch ]]; then
+      to="${1:?usage: hatswap switch <account|main> [session-id] [--default] [--yes]}"; shift
+      [[ "$to" == codex ]] && { echo "switch moves a conversation between Claude accounts; for Codex use: handoff codex" >&2; exit 1; }
+    elif [[ "$cmd" == handoff ]]; then
+      to="${1:?usage: hatswap handoff <account|main|codex> [session-id] [--fork|--brief|--from file] [--edit] [--model m] [--no-repo]}"; shift
+    else
+      to=""
+    fi
+    warn_stale_commands
+    sid=""; fork=0; brief=0; edit=0; from=""; make_default=0; yes=0; codex_as=""; CODEX_ACCOUNT_DIR=""; BRIEF_MODEL=sonnet; BRIEF_REPO=1
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --default) make_default=1; shift ;;
+        --yes|-y) yes=1; shift ;;
+        --fork) fork=1; shift ;;
+        --brief) brief=1; shift ;;
+        --edit) edit=1; brief=1; shift ;;
+        --from) from="${2:?}"; shift 2 ;;
+        --model) BRIEF_MODEL="${2:?}"; shift 2 ;;
+        --no-repo) BRIEF_REPO=0; shift ;;
+        --as) codex_as="${2:?}"; shift 2 ;;
+        *) sid="$1"; shift ;;
+      esac
+    done
+    [[ "$cmd" == refresh ]] && brief=1
+    if [[ -n "${codex_as:-}" ]]; then
+      [[ "$to" == codex ]] || { echo "--as is for handoff codex" >&2; exit 1; }
+      CODEX_ACCOUNT_DIR="$(config_dir_of "$codex_as")"
+      [[ -d "$CODEX_ACCOUNT_DIR" ]] || { echo "No profile $codex_as" >&2; exit 1; }
+      codex_signed_in "$CODEX_ACCOUNT_DIR" || { echo "$codex_as has no Codex login. Run: hatswap codex-login $codex_as" >&2; exit 1; }
+    fi
+    if [[ "$to" == codex ]]; then
+      brief=1
+      command -v codex >/dev/null || { echo "codex is not installed" >&2; exit 1; }
+      dir=codex
+    elif [[ -n "$to" ]]; then
+      dir="$(config_dir_of "$to")"
+      [[ -d "$dir" ]] || { echo "No profile $to" >&2; exit 1; }
+    fi
+    if [[ "$make_default" == 1 ]]; then
+      [[ -n "$to" && "$to" != codex ]] || { echo "--default needs an account name" >&2; exit 1; }
+      set_default "$to"
+    fi
+    # Run from inside Claude, switch acts on that very session.
+    [[ "$cmd" == switch && -z "$sid" && -n "${CLAUDE_CODE_SESSION_ID:-}" ]] && sid="$CLAUDE_CODE_SESSION_ID"
+    if [[ -n "$from" ]]; then
+      [[ -n "$to" ]] || dir="$(owner_dir "")"
+      if [[ "$dir" == codex && -z "${CODEX_ACCOUNT_DIR:-}" ]] && codex_signed_in "$(owner_dir "")"; then CODEX_ACCOUNT_DIR="$(owner_dir "")"; fi
+      [[ "$edit" == 1 ]] && edit_brief "$from"
+      echo "Starting $( [[ "$dir" == codex ]] && echo codex || account_label "$dir" ) from $from"
+      start_from_brief "$dir" "$from"
+    fi
+    row="$(pick_session "$sid")" || exit 1
+    sid="$(cut -f3 <<<"$row")"; state="$(cut -f1 <<<"$row")"; owner="$(cut -f2 <<<"$row")"; title="$(cut -f5 <<<"$row")"
+    [[ -n "$to" ]] || dir="$(owner_dir "$owner")"
+    if [[ "$brief" == 1 ]]; then
+      need_tty
+      bill="$dir"; [[ "$dir" == codex ]] && bill="$(owner_dir "$owner")"
+      # Codex runs on the session's account's Codex login when it has one.
+      if [[ "$dir" == codex && -z "${CODEX_ACCOUNT_DIR:-}" ]] && codex_signed_in "$bill"; then CODEX_ACCOUNT_DIR="$bill"; fi
+      out="$(write_brief "$sid" "$bill")" || exit 1
+      echo "Brief saved: ${out/#$HOME/~}"
+      [[ "$edit" == 1 ]] && edit_brief "$out"
+      [[ "$state" == live ]] && echo "Note: the original session is still open in '$owner'; close it when the new one is running."
+      start_from_brief "$dir" "$out"
+    fi
+    if [[ "$cmd" == switch && "$state" == live && "$fork" == 0 ]]; then
+      read -r pid pane < <(live_info "$sid") || true
+      if [[ -n "${pid:-}" ]]; then
+        if [[ "$yes" != 1 && -t 0 && -t 1 ]]; then
+          read -r -p "'${title:-$sid}' is open in '$owner'. Restart it on '$to'? [y/N] " ok || ok=n
+          [[ "$ok" == y || "$ok" == Y ]] || exit 0
+          yes=1
+        fi
+        ensure_transcript "$sid" "$dir"
+        if { [[ -n "${pane:-}" ]] && switch_in_pane "$pid" "$pane" "$sid" "$dir"; } || switch_in_terminal "$pid" "$sid" "$dir"; then
+          echo "Switching '${title:-$sid}' to '$to' ($(email_of "$( [[ "$dir" == "$MAIN" ]] && echo "$HOME" || echo "$dir")")). This tab restarts in a moment with the same conversation."
+          exit 0
+        fi
+      fi
+      if [[ -n "${pid:-}" ]] && is_descendant $$ "$pid"; then
+        echo "This terminal cannot be restarted from inside (supported: tmux, Terminal.app, iTerm2). Type /exit, then run: hatswap switch $to" >&2
+        exit 1
+      fi
+      need_tty
+      if [[ -n "${pid:-}" ]]; then
+        if [[ "$yes" != 1 ]]; then
+          read -r -p "'${title:-$sid}' is open in '$owner'. Close it there and continue here as '$to'? [y/N] " ok || ok=n
+          [[ "$ok" == y || "$ok" == Y ]] || exit 0
+        fi
+        stop_session "$pid"
+      fi
+      state=closed
+    fi
+    if [[ "$state" == live && "$fork" == 0 ]]; then
+      echo "Session $sid is still open in account '$owner'." >&2
+      echo "Type /exit in that window first, then run this again." >&2
+      echo "Or add --fork to continue a copy, or --brief to start fresh from a summary." >&2
+      exit 1
+    fi
+    echo "$( [[ "$cmd" == switch ]] && echo Switching || echo Handing off ) to '$to': ${title:-$sid}"
+    ensure_transcript "$sid" "$dir"
+    [[ "$fork" == 1 ]] && set -- --resume "$sid" --fork-session || set -- --resume "$sid"
+    run "$dir" "$@"
+    ;;
+  use)
+    name="${1:?name required}"; shift
+    [[ "$name" == main ]] && dir="$MAIN" || { valid "$name"; dir="$(dir_of "$name")"; }
+    [[ -d "$dir" ]] || { echo "No profile $name. Run: hatswap add $name" >&2; exit 1; }
+    args=()
+    for a in "$@"; do
+      [[ "$a" == --default ]] && { need_tty; set_default "$name"; continue; }
+      args+=("$a")
+    done
+    run "$dir" ${args[@]+"${args[@]}"}
+    ;;
+  pin)
+    if [[ -z "${1:-}" ]]; then
+      if p="$(folder_pin)"; then
+        echo "$(cut -f1 <<<"$p")  (pinned by $(cut -f2 <<<"$p" | sed "s|^$HOME|~|"))"
+      else
+        echo "Not pinned; new sessions here use: $(new_session_account | cut -f1)"
+      fi
+    elif [[ "$1" == --clear ]]; then
+      if [[ -e "$PWD/.hatswap" || -e "$PWD/.claude-account" ]]; then
+        rm -f "$PWD/.hatswap" "$PWD/.claude-account"; echo "Unpinned ${PWD/#$HOME/~}"
+      else
+        echo "No pin in $PWD" >&2
+      fi
+      p="$(folder_pin)" && echo "Still pinned to $(cut -f1 <<<"$p") by $(cut -f2 <<<"$p" | sed "s|^$HOME|~|")"
+      true
+    else
+      name="$1"
+      [[ "$name" == main ]] || { valid "$name"; [[ -d "$BASE/$name" ]] || { echo "No profile $name" >&2; exit 1; }; }
+      printf '# hatswap: Claude Code sessions in this folder use this account\n%s\n' "$name" > "$PWD/.hatswap"
+      rm -f "$PWD/.claude-account"
+      echo "Pinned ${PWD/#$HOME/~} to '$name' ($(email_of "$( [[ "$name" == main ]] && echo "$HOME" || echo "$BASE/$name")"))"
+      if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && ! git check-ignore -q "$PWD/.hatswap" 2>/dev/null; then
+        ex="$(git rev-parse --git-path info/exclude)"
+        mkdir -p "$(dirname "$ex")"; echo ".hatswap" >> "$ex"
+        echo "Added .hatswap to this repo's local ignore (.git/info/exclude), so it is not committed."
+      fi
+      ensure_hook
+    fi
+    ;;
+  default)
+    if [[ -z "${1:-}" ]]; then
+      default_name
+    else
+      set_default "$1"
+    fi
+    ;;
+  shell-init)
+    shell_init "${1:-}"
+    ;;
+  setup-shell)
+    sh=""; remove=0
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --remove) remove=1; shift ;;
+        --shell) sh="${2:?}"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+      esac
+    done
+    sh="$(user_shell "$sh")" || exit 1
+    [[ "$remove" == 1 ]] && remove_hook "$sh" || install_hook "$sh"
+    ;;
+  private)
+    name="${1:?usage: hatswap private <name> [--off]}"; valid "$name"
+    dir="$(dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    if [[ "${2:-}" == --off ]]; then
+      make_shared "$dir"; echo "$name shares history with the other accounts again."
+    else
+      make_private "$dir"
+      echo "$name now keeps its own conversation history and memory. Earlier conversations stay in the shared history."
+    fi
+    ;;
+  codex-login)
+    name="${1:?usage: hatswap codex-login <name|main>}"
+    dir="$(config_dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    codex_login "$dir" "${@:2}"
+    ;;
+  codex)
+    name="${1:?usage: hatswap codex <account|main> [codex args]}"; shift
+    dir="$(config_dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    codex_signed_in "$dir" || [[ "$dir" == "$MAIN" ]] || { echo "$name has no Codex login. Run: hatswap codex-login $name" >&2; exit 1; }
+    codex_run "$dir" "$@"
+    ;;
+  update)
+    self="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")"
+    if git -C "$(dirname "$self")" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "Installed from a clone; updating it with git pull."
+      git -C "$(dirname "$self")" pull --ff-only
+    else
+      [[ -w "$self" ]] || { echo "Cannot write $self" >&2; exit 1; }
+      tmp="$(mktemp)"
+      curl -fsSL "$REPO_RAW/bin/hatswap" -o "$tmp" || { rm -f "$tmp"; echo "Download failed" >&2; exit 1; }
+      bash -n "$tmp" || { rm -f "$tmp"; echo "Downloaded file is not valid; nothing changed" >&2; exit 1; }
+      new="$(bash "$tmp" --version)"
+      chmod 755 "$tmp"
+      if [[ "$(basename "$self")" == claude-account ]]; then
+        # Installed under the old name: install hatswap beside it and keep
+        # claude-account as an alias.
+        mv "$tmp" "$(dirname "$self")/hatswap"
+        ln -sf hatswap "$self"
+        self="$(dirname "$self")/hatswap"
+        echo "claude-account is now hatswap; 'claude-account' still works as an alias."
+      else
+        mv "$tmp" "$self"
+      fi
+      echo "Updated: hatswap $VERSION -> ${new#hatswap }"
+    fi
+    if [[ -f "$MAIN/commands/handoff.md" || -f "$MAIN/commands/switch.md" ]]; then
+      "$self" install-command
+    fi
+    ;;
+  login)
+    name="${1:?name required}"; valid "$name"
+    dir="$(dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    CLAUDE_CONFIG_DIR="$dir" claude auth login "${@:2}"
+    ;;
+  list)
+    warn_stale_commands
+    def="$(default_name)"
+    extras() {
+      local n="$1" d="$2" out=""
+      [[ "$n" == "$def" ]] && out+="  [default]"
+      is_private "$d" && out+="  [private]"
+      codex_signed_in "$d" && out+="  codex: $(codex_email "$(codex_home_of "$d")")"
+      echo "$out"
+    }
+    printf "%-16s %s%s\n" "main" "$(email_of "$HOME")  (~/.claude)" "$(extras main "$MAIN")"
+    [[ -d "$BASE" ]] || exit 0
+    for d in "$BASE"/*/; do
+      [[ -d "$d" ]] || continue
+      n="$(basename "$d")"
+      printf "%-16s %s%s\n" "$n" "$(email_of "${d%/}")" "$(extras "$n" "${d%/}")"
+    done
+    ;;
+  remove)
+    name="${1:?name required}"; valid "$name"
+    [[ "$name" == main ]] && { echo "Refusing to remove the default account" >&2; exit 1; }
+    dir="$(dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    read -r -p "Delete profile $name and its saved login? [y/N] " ok || ok=n
+    [[ "$ok" == y || "$ok" == Y ]] || exit 0
+    CLAUDE_CONFIG_DIR="$dir" claude auth logout >/dev/null 2>&1 || true
+    if [[ -d "$dir/codex" ]] && command -v codex >/dev/null; then CODEX_HOME="$dir/codex" codex logout >/dev/null 2>&1 || true; fi
+    [[ -d "$dir/codex" ]] && find "$dir/codex" -maxdepth 1 -type l -delete
+    [[ "$(default_name)" == "$name" ]] && rm -f "$DEFAULT_FILE"
+    find "$dir" -maxdepth 1 -type l -delete
+    rm -rf "$dir"
+    echo "Removed $name."
+    ;;
+  main)
+    run "$MAIN" "$@"
+    ;;
+  whoami|current)
+    warn_stale_commands
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+      cur="$CLAUDE_CONFIG_DIR"; cfg="$cur"
+    else
+      cur="$MAIN"; cfg="$HOME"
+    fi
+    printf "%-16s %s\n" "$(account_label "$cur")" "$(email_of "$cfg")$( [[ -n "${CLAUDECODE:-}" ]] && echo "  (this Claude session)" || echo "  (this shell)")"
+    nsa="$(new_session_account)"; def="$(cut -f1 <<<"$nsa")"
+    sh="$(user_shell 2>/dev/null || true)"
+    if [[ "$def" != main && -n "$sh" ]] && ! hook_installed "$sh"; then
+      echo "new 'claude' sessions here: main (should be '$def', $(cut -f2 <<<"$nsa"), but the shell hook is missing: hatswap setup-shell)"
+    else
+      echo "new 'claude' sessions here: $def ($(cut -f2 <<<"$nsa"))"
+    fi
+    ;;
+  -V|--version|version) echo "hatswap $VERSION" ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "Unknown command: $cmd" >&2; usage; exit 1 ;;
+esac
