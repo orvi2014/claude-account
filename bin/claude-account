@@ -17,11 +17,24 @@ Usage: claude-account <command> [name] [claude args...]
 
   add <name> [--email you@x.com] [--console]
                       create an account profile, then sign in to it
-  use <name> [args]   start Claude with that account (extra args go to claude)
+  use <name> [args]   start Claude with that account (extra args go to claude);
+                      --default also makes it the default for plain 'claude'
+  switch <account|main> [id] [--default]
+                      continue the current conversation on that account. Run
+                      inside Claude (! claude-account switch work, or /switch
+                      work) it restarts the same tab in place when the tab is
+                      in tmux; from another terminal it closes the session
+                      where it is open and resumes it there
+  default [name|main] show or set the account plain 'claude' starts with
+  setup-shell [--remove] [--shell zsh|bash|fish]
+                      add (or remove) the hook that makes plain 'claude'
+                      follow the default, in your shell's startup file
+  shell-init [zsh|bash|fish]
+                      print that hook (setup-shell installs it for you)
   login <name>        sign in (or re-sign in) to that account
   list                show profiles and the email each is signed in as
   remove <name>       delete a profile and its saved login
-  main [args]         start Claude with the default account (~/.claude)
+  main [args]         start Claude with the main account (~/.claude)
   sessions [n]        recent conversations in this folder, and which are open
 
 Handoff (default session: the newest one in this folder)
@@ -33,7 +46,7 @@ Handoff (default session: the newest one in this folder)
   refresh [id]        brief + fresh session on the same account (for a
                       session that has grown too long)
   brief [id]          print a brief without switching
-    brief options:    --edit (review in $EDITOR first)  --model <m>
+    brief options:    --edit (review in \$EDITOR first)  --model <m>
                       --no-repo (skip git/PR state)  --from <file> (reuse a
                       saved brief with handoff or refresh)
   briefs [n]          list saved briefs
@@ -46,6 +59,211 @@ may also come first (claude-account <name> list|login|remove).
 
 Profiles live in $BASE/<name>. Names: letters, digits, - and _.
 EOF
+}
+
+DEFAULT_FILE="$BASE/.default"
+
+default_name() {
+  local n=""
+  [[ -r "$DEFAULT_FILE" ]] && n="$(tr -d '[:space:]' < "$DEFAULT_FILE")"
+  [[ -n "$n" && -d "$BASE/$n" ]] && echo "$n" || echo main
+}
+
+set_default() {
+  local name="$1"
+  if [[ "$name" == main ]]; then
+    rm -f "$DEFAULT_FILE"
+  else
+    valid "$name"
+    [[ -d "$BASE/$name" ]] || { echo "No profile $name" >&2; exit 1; }
+    mkdir -p "$BASE"; chmod 700 "$BASE"
+    echo "$name" > "$DEFAULT_FILE"
+  fi
+  echo "Default account: $name (new 'claude' sessions start on it)"
+  [[ "$name" == main ]] || ensure_hook
+}
+
+user_shell() {
+  local sh="${1:-$(basename "${SHELL:-zsh}")}"
+  case "$sh" in zsh|bash|fish) echo "$sh" ;; *) echo "Unsupported shell: $sh (zsh, bash or fish)" >&2; return 1 ;; esac
+}
+
+# Startup file the hook goes in for a shell.
+rc_file() {
+  case "$1" in
+    zsh) echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) [[ "$(uname)" == Darwin ]] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc" ;;
+    fish) echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/claude-account.fish" ;;
+  esac
+}
+
+HOOK_BEGIN="# >>> claude-account >>>"
+HOOK_END="# <<< claude-account <<<"
+
+hook_installed() {
+  local f; f="$(rc_file "$1")"
+  [[ -f "$f" ]] && grep -qF "$HOOK_BEGIN" "$f"
+}
+
+install_hook() {
+  local sh="$1" f; f="$(rc_file "$sh")"
+  if hook_installed "$sh"; then echo "Shell hook already in ${f/#$HOME/~}"; return 0; fi
+  mkdir -p "$(dirname "$f")"
+  {
+    [[ -s "$f" ]] && echo
+    echo "$HOOK_BEGIN"
+    if [[ "$sh" == fish ]]; then
+      echo "command -q claude-account; and claude-account shell-init fish | source"
+    else
+      echo "command -v claude-account >/dev/null 2>&1 && eval \"\$(claude-account shell-init $sh)\""
+    fi
+    echo "$HOOK_END"
+  } >> "$f"
+  echo "Added the shell hook to ${f/#$HOME/~}. It applies to new terminals; in this one run: source ${f/#$HOME/~}"
+}
+
+remove_hook() {
+  local sh="$1" f tmp; f="$(rc_file "$sh")"
+  hook_installed "$sh" || { echo "No shell hook in ${f/#$HOME/~}"; return 0; }
+  tmp="$(mktemp)"
+  awk -v b="$HOOK_BEGIN" -v e="$HOOK_END" '$0==b{skip=1; next} $0==e{skip=0; next} !skip' "$f" > "$tmp"
+  cat "$tmp" > "$f"; rm -f "$tmp"
+  [[ "$sh" == fish && ! -s "$f" ]] && rm -f "$f"
+  echo "Removed the shell hook from ${f/#$HOME/~}"
+}
+
+# After setting a default: offer to install the hook if it is missing.
+ensure_hook() {
+  local sh; sh="$(user_shell 2>/dev/null)" || { echo "Plain 'claude' follows the default only with the shell hook; see: claude-account shell-init" >&2; return 0; }
+  hook_installed "$sh" && return 0
+  if [[ -t 0 && -t 1 ]]; then
+    read -r -p "Plain 'claude' needs a one-line hook in $(rc_file "$sh" | sed "s|^$HOME|~|") to follow the default. Add it? [Y/n] " ok || ok=n
+    [[ "$ok" == n || "$ok" == N ]] || { install_hook "$sh"; return 0; }
+  fi
+  echo "Plain 'claude' follows the default once you run: claude-account setup-shell" >&2
+}
+
+# Shell hook: plain `claude` runs on the default account unless
+# CLAUDE_CONFIG_DIR is already set. The default is read on every call, so
+# changing it needs no reload.
+shell_init() {
+  if [[ "${1:-}" == fish ]]; then
+    cat <<EOF
+function claude --wraps claude
+  if not set -q CLAUDE_CONFIG_DIR; and test -r "$DEFAULT_FILE"
+    set -l _ca_name (string trim < "$DEFAULT_FILE")
+    if test -n "\$_ca_name"; and test -d "$BASE/\$_ca_name"
+      CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude \$argv
+      return
+    end
+  end
+  command claude \$argv
+end
+EOF
+    return
+  fi
+  cat <<EOF
+claude() {
+  if [ -z "\${CLAUDE_CONFIG_DIR-}" ] && [ -r "$DEFAULT_FILE" ]; then
+    local _ca_name
+    _ca_name="\$(tr -d '[:space:]' < "$DEFAULT_FILE")"
+    if [ -n "\$_ca_name" ] && [ -d "$BASE/\$_ca_name" ]; then
+      CLAUDE_CONFIG_DIR="$BASE/\$_ca_name" command claude "\$@"
+      return
+    fi
+  fi
+  command claude "\$@"
+}
+EOF
+}
+
+# live_info <session-id>: "<pid> <tmux pane>" of the Claude process that has
+# it open (pane may be empty), or nothing.
+live_info() {
+  python3 - "$MAIN" "$BASE" "$1" <<'PY'
+import glob, json, os, sys
+main, base, sid = sys.argv[1:4]
+dirs = [main] + [d for d in glob.glob(os.path.join(base, "*")) if os.path.isdir(d)]
+for cfg in dirs:
+    for f in glob.glob(os.path.join(cfg, "sessions", "*.json")):
+        try:
+            s = json.load(open(f))
+            if s.get("sessionId") == sid:
+                os.kill(int(s["pid"]), 0)
+                pane = str(s.get("tmux") or "").rsplit(".", 1)[-1]
+                if not pane.startswith("%"):
+                    pane = os.environ.get("TMUX_PANE", "") if str(s["pid"]) == os.environ.get("CLAUDE_PID") else ""
+                print(s["pid"], pane); sys.exit(0)
+        except Exception:
+            pass
+PY
+}
+
+# is_descendant <pid> <ancestor>
+is_descendant() {
+  local p="$1"
+  while [[ -n "$p" && "$p" != 0 && "$p" != 1 ]]; do
+    [[ "$p" == "$2" ]] && return 0
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+  done
+  return 1
+}
+
+# switch_in_pane <pid> <pane> <session-id> <config dir>: restart the tmux pane
+# that holds the session so it resumes on another account. The restart runs
+# from the tmux server after a short delay, so it works from inside the
+# session itself. Returns 1 when the session is not in a reachable tmux pane.
+switch_in_pane() {
+  local pid="$1" pane="$2" sid="$3" dir="$4" pane_pid start cmd jobs job self go
+  [[ -n "$pane" ]] && command -v tmux >/dev/null || return 1
+  pane_pid="$(tmux display -p -t "$pane" '#{pane_pid}' 2>/dev/null)" || return 1
+  [[ -n "$pane_pid" ]] || return 1
+  [[ "$dir" == "$MAIN" ]] || link_shared "$dir"
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  jobs="$BASE/.jobs"; mkdir -p "$jobs"; chmod 700 "$BASE" "$jobs"
+  job="$(umask 077; mktemp "$jobs/switch-XXXXXX")"
+  go="$job.go"
+  if [[ "$pane_pid" == "$pid" ]]; then
+    # Claude is the pane's own process (Clave and similar): rerun the pane's
+    # start command so its flags, hooks and MCP config are kept.
+    start="$(tmux display -p -t "$pane" '#{pane_start_command}')"
+    if [[ "$start" == *"--session-id $sid"* ]]; then
+      cmd="${start/--session-id $sid/--resume $sid}"
+      if [[ "$dir" == "$MAIN" ]]; then cmd="env -u CLAUDE_CONFIG_DIR $cmd"; else cmd="env CLAUDE_CONFIG_DIR=$(printf %q "$dir") $cmd"; fi
+    else
+      cmd="$(printf %q "$self") $(account_label "$dir") --resume $sid"
+    fi
+    printf 'rm -f "$0"\nexec %s\n' "$cmd" > "$job"
+    printf 'sleep %s\ntmux respawn-pane -k -t %q -c %q %q\nrm -f "$0"\n' \
+      "${CLAUDE_ACCOUNT_SWITCH_DELAY:-2}" "$pane" "$PWD" "bash $(printf %q "$job")" > "$go"
+  elif is_descendant "$pid" "$pane_pid"; then
+    # Claude runs under a shell in the pane: stop it, then type the resume
+    # command into that shell.
+    rm -f "$job"
+    cmd="$(printf %q "$self") $(account_label "$dir") --resume $sid"
+    printf 'sleep %s\nkill -TERM %s\nfor i in $(seq 1 50); do kill -0 %s 2>/dev/null || break; sleep 0.2; done\ntmux send-keys -t %q -l %q\ntmux send-keys -t %q Enter\nrm -f "$0"\n' \
+      "${CLAUDE_ACCOUNT_SWITCH_DELAY:-2}" "$pid" "$pid" "$pane" "$cmd" "$pane" > "$go"
+  else
+    rm -f "$job"; return 1
+  fi
+  tmux run-shell -b "bash $(printf %q "$go")"
+}
+
+# stop_session <pid>: ask Claude to exit (SIGTERM) and wait for it.
+stop_session() {
+  local pid="$1" i
+  # Never stop a Claude we are running inside.
+  if is_descendant $$ "$pid"; then
+    echo "This session is not in tmux, so it cannot restart itself. Type /exit, then run: claude-account switch $to" >&2
+    exit 1
+  fi
+  kill -TERM "$pid" 2>/dev/null || return 0
+  for i in $(seq 1 50); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.2
+  done
+  echo "Session (pid $pid) did not exit; close it with /exit and run this again." >&2
+  exit 1
 }
 
 valid() { [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Bad name: $1" >&2; exit 1; }; }
@@ -165,7 +383,7 @@ cmd="${1:-}"; shift || true
 if [[ -n "$cmd" && "$cmd" =~ ^[A-Za-z0-9_-]+$ && -d "$BASE/$cmd" ]]; then
   case "${1:-}" in
     list) cmd=list; shift ;;
-    use|login|remove) next="$1"; shift; set -- "$cmd" "$@"; cmd="$next" ;;
+    use|login|remove|switch) next="$1"; shift; set -- "$cmd" "$@"; cmd="$next" ;;
     *) set -- "$cmd" "$@"; cmd=use ;;
   esac
 fi
@@ -441,11 +659,25 @@ start_from_brief() {
 }
 
 install_command() {
-  local force="$1" dest="$MAIN/commands/handoff.md"
+  local force="$1" dest="$MAIN/commands/handoff.md" sw="$MAIN/commands/switch.md"
   mkdir -p "$MAIN/commands"
-  if [[ -e "$dest" && "$force" != 1 ]]; then
-    echo "$dest already exists; add --force to replace it" >&2; exit 1
+  if [[ ( -e "$dest" || -e "$sw" ) && "$force" != 1 ]]; then
+    echo "$dest or $sw already exists; add --force to replace them" >&2; exit 1
   fi
+  cat > "$sw" <<'CMD'
+---
+description: Continue this conversation on another Claude account (claude-account)
+argument-hint: "<account | main> [--default]"
+---
+
+Run exactly this one command with the Bash tool, and nothing else:
+
+```
+claude-account switch $ARGUMENTS
+```
+
+Then reply with its output in one short line. If it says this tab restarts, add nothing more.
+CMD
   cat > "$dest" <<'CMD'
 ---
 description: Write a handoff brief of this session, then continue it on another account, in a fresh session, or in Codex
@@ -482,8 +714,8 @@ It prints the saved path. Then reply with one short message containing:
 - the command to continue, to be run in a normal terminal tab: `claude-account handoff $ARGUMENTS --from <path>`, or, if no account was given, `claude-account refresh --from <path>` (a fresh session on this account);
 - a note that they can /exit this window first.
 CMD
-  echo "Installed /handoff at $dest"
-  echo "In Claude Code: /handoff work   (or /handoff codex, or just /handoff)"
+  echo "Installed /handoff at $dest and /switch at $sw"
+  echo "In Claude Code: /handoff work (or /handoff codex, or just /handoff); /switch work"
 }
 
 seed_prompt() {
@@ -504,7 +736,7 @@ pick_session() {
 case "$cmd" in
   add)
     name="${1:?name required}"; valid "$name"
-    case "$name" in main|codex|help|list|sessions|brief|briefs|handoff|refresh|use|add|login|remove|save-brief|install-command)
+    case "$name" in main|codex|help|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
       echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
     dir="$(dir_of "$name")"
     [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
@@ -557,15 +789,20 @@ case "$cmd" in
   install-command)
     install_command "$([[ "${1:-}" == --force ]] && echo 1)"
     ;;
-  refresh|handoff)
-    if [[ "$cmd" == handoff ]]; then
+  refresh|handoff|switch)
+    if [[ "$cmd" == switch ]]; then
+      to="${1:?usage: claude-account switch <account|main> [session-id] [--default] [--yes]}"; shift
+      [[ "$to" == codex ]] && { echo "switch moves a conversation between Claude accounts; for Codex use: handoff codex" >&2; exit 1; }
+    elif [[ "$cmd" == handoff ]]; then
       to="${1:?usage: claude-account handoff <account|main|codex> [session-id] [--fork|--brief|--from file] [--edit] [--model m] [--no-repo]}"; shift
     else
       to=""
     fi
-    sid=""; fork=0; brief=0; edit=0; from=""; BRIEF_MODEL=sonnet; BRIEF_REPO=1
+    sid=""; fork=0; brief=0; edit=0; from=""; make_default=0; yes=0; BRIEF_MODEL=sonnet; BRIEF_REPO=1
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --default) make_default=1; shift ;;
+        --yes|-y) yes=1; shift ;;
         --fork) fork=1; shift ;;
         --brief) brief=1; shift ;;
         --edit) edit=1; brief=1; shift ;;
@@ -584,6 +821,12 @@ case "$cmd" in
       dir="$(config_dir_of "$to")"
       [[ -d "$dir" ]] || { echo "No profile $to" >&2; exit 1; }
     fi
+    if [[ "$make_default" == 1 ]]; then
+      [[ -n "$to" && "$to" != codex ]] || { echo "--default needs an account name" >&2; exit 1; }
+      set_default "$to"
+    fi
+    # Run from inside Claude, switch acts on that very session.
+    [[ "$cmd" == switch && -z "$sid" && -n "${CLAUDE_CODE_SESSION_ID:-}" ]] && sid="$CLAUDE_CODE_SESSION_ID"
     if [[ -n "$from" ]]; then
       [[ -n "$to" ]] || dir="$(owner_dir "")"
       [[ "$edit" == 1 ]] && edit_brief "$from"
@@ -602,21 +845,74 @@ case "$cmd" in
       [[ "$state" == live ]] && echo "Note: the original session is still open in '$owner'; close it when the new one is running."
       start_from_brief "$dir" "$out"
     fi
+    if [[ "$cmd" == switch && "$state" == live && "$fork" == 0 ]]; then
+      read -r pid pane < <(live_info "$sid") || true
+      if [[ -n "${pid:-}" && -n "${pane:-}" ]]; then
+        if [[ "$yes" != 1 && -t 0 && -t 1 ]]; then
+          read -r -p "'${title:-$sid}' is open in '$owner'. Restart it on '$to'? [y/N] " ok || ok=n
+          [[ "$ok" == y || "$ok" == Y ]] || exit 0
+        fi
+        if switch_in_pane "$pid" "$pane" "$sid" "$dir"; then
+          echo "Switching '${title:-$sid}' to '$to' ($(email_of "$( [[ "$dir" == "$MAIN" ]] && echo "$HOME" || echo "$dir")")). This tab restarts in a moment with the same conversation."
+          exit 0
+        fi
+      fi
+      if [[ -n "${pid:-}" ]] && is_descendant $$ "$pid"; then
+        echo "This session is not in tmux, so it cannot restart itself. Type /exit, then run: claude-account switch $to" >&2
+        exit 1
+      fi
+      need_tty
+      if [[ -n "${pid:-}" ]]; then
+        if [[ "$yes" != 1 ]]; then
+          read -r -p "'${title:-$sid}' is open in '$owner'. Close it there and continue here as '$to'? [y/N] " ok
+          [[ "$ok" == y || "$ok" == Y ]] || exit 0
+        fi
+        stop_session "$pid"
+      fi
+      state=closed
+    fi
     if [[ "$state" == live && "$fork" == 0 ]]; then
       echo "Session $sid is still open in account '$owner'." >&2
       echo "Type /exit in that window first, then run this again." >&2
       echo "Or add --fork to continue a copy, or --brief to start fresh from a summary." >&2
       exit 1
     fi
-    echo "Handing off to '$to': ${title:-$sid}"
+    echo "$( [[ "$cmd" == switch ]] && echo Switching || echo Handing off ) to '$to': ${title:-$sid}"
     [[ "$fork" == 1 ]] && set -- --resume "$sid" --fork-session || set -- --resume "$sid"
     run "$dir" "$@"
     ;;
   use)
-    name="${1:?name required}"; valid "$name"; shift
-    dir="$(dir_of "$name")"
+    name="${1:?name required}"; shift
+    [[ "$name" == main ]] && dir="$MAIN" || { valid "$name"; dir="$(dir_of "$name")"; }
     [[ -d "$dir" ]] || { echo "No profile $name. Run: claude-account add $name" >&2; exit 1; }
-    run "$dir" "$@"
+    args=()
+    for a in "$@"; do
+      [[ "$a" == --default ]] && { need_tty; set_default "$name"; continue; }
+      args+=("$a")
+    done
+    run "$dir" ${args[@]+"${args[@]}"}
+    ;;
+  default)
+    if [[ -z "${1:-}" ]]; then
+      default_name
+    else
+      set_default "$1"
+    fi
+    ;;
+  shell-init)
+    shell_init "${1:-}"
+    ;;
+  setup-shell)
+    sh=""; remove=0
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --remove) remove=1; shift ;;
+        --shell) sh="${2:?}"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+      esac
+    done
+    sh="$(user_shell "$sh")" || exit 1
+    [[ "$remove" == 1 ]] && remove_hook "$sh" || install_hook "$sh"
     ;;
   login)
     name="${1:?name required}"; valid "$name"
@@ -625,12 +921,14 @@ case "$cmd" in
     CLAUDE_CONFIG_DIR="$dir" claude auth login "${@:2}"
     ;;
   list)
-    printf "%-16s %s\n" "main" "$(email_of "$HOME")  (~/.claude)"
+    def="$(default_name)"
+    mark() { [[ "$1" == "$def" ]] && echo "  [default]" || true; }
+    printf "%-16s %s%s\n" "main" "$(email_of "$HOME")  (~/.claude)" "$(mark main)"
     [[ -d "$BASE" ]] || exit 0
     for d in "$BASE"/*/; do
       [[ -d "$d" ]] || continue
       n="$(basename "$d")"
-      printf "%-16s %s\n" "$n" "$(email_of "${d%/}")"
+      printf "%-16s %s%s\n" "$n" "$(email_of "${d%/}")" "$(mark "$n")"
     done
     ;;
   remove)
@@ -641,6 +939,7 @@ case "$cmd" in
     read -r -p "Delete profile $name and its saved login? [y/N] " ok
     [[ "$ok" == y || "$ok" == Y ]] || exit 0
     CLAUDE_CONFIG_DIR="$dir" claude auth logout >/dev/null 2>&1 || true
+    [[ "$(default_name)" == "$name" ]] && rm -f "$DEFAULT_FILE"
     find "$dir" -maxdepth 1 -type l -delete
     rm -rf "$dir"
     echo "Removed $name."

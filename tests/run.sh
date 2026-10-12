@@ -8,7 +8,7 @@ BIN="$ROOT/bin/claude-account"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 export HOME="$T/home" CLAUDE_ACCOUNTS_DIR="$T/home/.claude-accounts"
-unset CLAUDE_CONFIG_DIR
+unset CLAUDE_CONFIG_DIR CLAUDE_CODE_SESSION_ID CLAUDE_PID TMUX TMUX_PANE
 mkdir -p "$HOME/.claude/projects" "$HOME/.claude/sessions" "$T/fake" "$T/work"
 echo '{}' > "$HOME/.claude/settings.json"
 mkdir -p "$HOME/.claude/agents"
@@ -108,6 +108,95 @@ ok "sessions marks the open one live" '[[ "$("$BIN" sessions | grep 22222222)" =
 ok "handoff refuses a live session" '[[ "$(tty_run "$BIN" handoff work)" == *"still open"* ]]'
 kill $LIVE 2>/dev/null
 
+# default account
+ok "default starts as main" '[[ "$("$BIN" default)" == main ]]'
+ok "default rejects unknown profile" '! "$BIN" default nope >/dev/null 2>&1'
+"$BIN" default work >/dev/null 2>&1
+ok "default sets the account" '[[ "$("$BIN" default)" == work && "$("$BIN" list | grep ^work)" == *"[default]"* ]]'
+ok "shell hook runs plain claude on the default" '[[ "$(bash -c "eval \"\$(\"$BIN\" shell-init)\"; claude hi")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=hi"* ]]'
+ok "shell hook respects an explicit CLAUDE_CONFIG_DIR" '[[ "$(CLAUDE_CONFIG_DIR=/x bash -c "eval \"\$(\"$BIN\" shell-init)\"; claude hi")" == *"CONFIG=/x"* ]]'
+"$BIN" default main >/dev/null 2>&1
+ok "default main clears it" '[[ "$("$BIN" default)" == main && ! -e "$CLAUDE_ACCOUNTS_DIR/.default" ]]'
+ok "shell hook falls back to main" '[[ "$(bash -c "eval \"\$(\"$BIN\" shell-init)\"; claude hi")" == *"CONFIG=<unset>"* ]]'
+out="$(tty_run "$BIN" use work --default --continue)"
+ok "use --default sets default and is not passed to claude" '[[ "$("$BIN" default)" == work && "$out" == *"ARGS=--continue"* && "$out" != *"ARGS=--default"* ]]'
+"$BIN" default main >/dev/null 2>&1
+
+# setup-shell
+ok "setup-shell adds the hook to .zshrc" '"$BIN" setup-shell --shell zsh >/dev/null && grep -q "claude-account shell-init zsh" "$HOME/.zshrc"'
+"$BIN" setup-shell --shell zsh >/dev/null
+ok "setup-shell is idempotent" '[[ "$(grep -c ">>> claude-account >>>" "$HOME/.zshrc")" == 1 ]]'
+"$BIN" default work >/dev/null 2>&1
+if command -v zsh >/dev/null; then
+  ok "installed hook makes plain claude follow the default" '[[ "$(PATH="$(dirname "$BIN"):$PATH" ZDOTDIR="$HOME" zsh -ic "claude hi" 2>/dev/null)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=hi"* ]]'
+fi
+"$BIN" default main >/dev/null 2>&1
+echo "keep-me" >> "$HOME/.zshrc"
+"$BIN" setup-shell --shell zsh --remove >/dev/null
+ok "setup-shell --remove takes out only the hook" '! grep -q claude-account "$HOME/.zshrc" && grep -q keep-me "$HOME/.zshrc"'
+ok "setup-shell rejects unknown shells" '! "$BIN" setup-shell --shell tcsh >/dev/null 2>&1'
+"$BIN" setup-shell --shell fish >/dev/null
+ok "setup-shell for fish writes a conf.d file" 'grep -q "shell-init fish | source" "$HOME/.config/fish/conf.d/claude-account.fish"'
+"$BIN" setup-shell --shell fish --remove >/dev/null
+ok "fish hook file is removed when empty" '[[ ! -e "$HOME/.config/fish/conf.d/claude-account.fish" ]]'
+if command -v fish >/dev/null; then
+  "$BIN" default work >/dev/null 2>&1
+  ok "fish hook follows the default" '[[ "$(fish -c "\"$BIN\" shell-init fish | source; claude hi")" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
+  "$BIN" default main >/dev/null 2>&1
+fi
+
+# switch
+ok "switch resumes a closed session on the target" '[[ "$(tty_run "$BIN" switch work)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=--resume 22222222"* ]]'
+ok "switch refuses codex" '! "$BIN" switch codex >/dev/null 2>&1'
+sleep 600 & LIVE=$!
+echo "{\"pid\":$LIVE,\"sessionId\":\"22222222-2222-2222-2222-222222222222\",\"cwd\":\"$T/work\"}" > "$HOME/.claude/sessions/$LIVE.json"
+out="$(tty_run "$BIN" switch work --yes --default)"
+ok "switch stops the live session and resumes it" '! kill -0 $LIVE 2>/dev/null && [[ "$out" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=--resume 22222222"* ]]'
+ok "switch --default sets the default" '[[ "$("$BIN" default)" == work ]]'
+rm -f "$HOME/.claude/sessions/$LIVE.json"; "$BIN" default main >/dev/null 2>&1
+
+# switch in place (tmux)
+cat > "$T/fake/tmux" <<'F'
+#!/bin/bash
+echo "TMUX $*" >> "$FAKE_LOG.tmux"
+case "$1" in
+  display) case "$*" in *pane_pid*) echo "$FAKE_PANE_PID" ;; *pane_start_command*) echo "$FAKE_START" ;; esac ;;
+  run-shell) bash -c "$3" ;;
+  respawn-pane) bash -c "${@: -1}" >> "$FAKE_LOG.tmux" 2>&1 ;;
+esac
+F
+chmod +x "$T/fake/tmux"
+export CLAUDE_ACCOUNT_SWITCH_DELAY=0
+SID=22222222-2222-2222-2222-222222222222
+sleep 600 & LIVE=$!
+echo "{\"pid\":$LIVE,\"sessionId\":\"$SID\",\"cwd\":\"$T/work\",\"tmux\":\"s:@1.%9\"}" > "$HOME/.claude/sessions/$LIVE.json"
+rm -f "$FAKE_LOG.tmux"
+out="$(FAKE_PANE_PID=$LIVE FAKE_START="claude --session-id $SID --keep-flag x" CLAUDE_CODE_SESSION_ID=$SID "$BIN" switch work 2>&1 </dev/null)"
+ok "switch inside tmux restarts the pane in place" '[[ "$out" == *"This tab restarts"* ]] && grep -q "respawn-pane -k -t %9" "$FAKE_LOG.tmux"'
+ok "in-place switch keeps the start flags and resumes on the target" 'grep -q "CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=--resume $SID --keep-flag x" "$FAKE_LOG.tmux"'
+rm -f "$FAKE_LOG.tmux"
+FAKE_PANE_PID=$LIVE FAKE_START="claude --session-id $SID" CLAUDE_CODE_SESSION_ID=$SID "$BIN" switch main </dev/null >/dev/null 2>&1
+ok "in-place switch to main unsets CLAUDE_CONFIG_DIR" 'grep -q "CONFIG=<unset> ARGS=--resume $SID" "$FAKE_LOG.tmux"'
+ok "in-place switch leaves no job files" '[[ -z "$(ls -A "$CLAUDE_ACCOUNTS_DIR/.jobs")" ]]'
+kill $LIVE 2>/dev/null; rm -f "$HOME/.claude/sessions/$LIVE.json"
+
+# claude running under a shell in the pane
+bash -c 'sleep 600 & echo $! > "$0"; wait' "$T/child" & SHELLPID=$!
+sleep 0.5; LIVE=$(cat "$T/child")
+echo "{\"pid\":$LIVE,\"sessionId\":\"$SID\",\"cwd\":\"$T/work\",\"tmux\":\"s:@1.%9\"}" > "$HOME/.claude/sessions/$LIVE.json"
+rm -f "$FAKE_LOG.tmux"
+FAKE_PANE_PID=$SHELLPID CLAUDE_CODE_SESSION_ID=$SID "$BIN" switch work </dev/null >/dev/null 2>&1
+ok "switch under a pane shell stops claude and types the resume" '! kill -0 $LIVE 2>/dev/null && grep -q "send-keys -t %9 -l .*work --resume $SID" "$FAKE_LOG.tmux"'
+kill $SHELLPID 2>/dev/null; rm -f "$HOME/.claude/sessions/$LIVE.json"
+
+# no tmux: explain what to do
+sleep 600 & LIVE=$!
+echo "{\"pid\":$LIVE,\"sessionId\":\"$SID\",\"cwd\":\"$T/work\"}" > "$HOME/.claude/sessions/$LIVE.json"
+out="$(CLAUDE_CODE_SESSION_ID=$SID "$BIN" switch work 2>&1 </dev/null)"
+ok "switch without tmux or terminal explains the next step" '[[ "$out" == *"needs a terminal"* || "$out" == *"/exit"* || "$out" == *"normal terminal"* ]] && kill -0 $LIVE'
+kill $LIVE 2>/dev/null; rm -f "$HOME/.claude/sessions/$LIVE.json"
+rm -f "$T/fake/tmux"
+
 # brief
 out="$("$BIN" brief 2>/dev/null)"
 ok "brief prints the model output" '[[ "$out" == *"# Handoff brief"* ]]'
@@ -164,6 +253,7 @@ ok "--from rejects a missing file" '[[ "$(tty_run "$BIN" handoff work --from /no
 
 # install-command
 "$BIN" install-command >/dev/null
+ok "install-command writes /switch" 'grep -q "claude-account switch \$ARGUMENTS" "$HOME/.claude/commands/switch.md"'
 ok "install-command writes /handoff" '[[ -f "$HOME/.claude/commands/handoff.md" ]] && grep -q "claude-account save-brief" "$HOME/.claude/commands/handoff.md" && grep -q "\$ARGUMENTS" "$HOME/.claude/commands/handoff.md"'
 ok "install-command will not overwrite" '! "$BIN" install-command >/dev/null 2>&1'
 ok "install-command --force overwrites" '"$BIN" install-command --force >/dev/null'
