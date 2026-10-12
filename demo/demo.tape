@@ -20,13 +20,14 @@ Type "claude-account whoami" Sleep 400ms Enter
 Sleep 2s
 Type "claude-account switch work" Sleep 400ms Enter
 Sleep 3s
-Type "claude-account default work" Sleep 400ms Enter
-Sleep 1.5s
-Type "claude" Sleep 400ms Enter
-Sleep 2.5s
 Type "clear" Enter
-Type "claude-account brief" Sleep 400ms Enter
-Sleep 7s
+Type "claude-account pin work" Sleep 400ms Enter
+Sleep 2.5s
+Type "claude" Sleep 400ms Enter
+Sleep 2s
+Type "cd ~ && claude" Sleep 400ms Enter
+Sleep 2.5s
+Type "cd billing" Enter
 Type "clear" Enter
 Type "claude-account handoff codex" Sleep 400ms Enter
 Sleep 5s

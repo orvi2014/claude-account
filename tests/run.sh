@@ -309,6 +309,11 @@ ok "install-command --force overwrites" '"$BIN" install-command --force >/dev/nu
 tty_run "$BIN" use work >/dev/null
 ok "/handoff reaches other accounts via the shared commands dir" '[[ -f "$CLAUDE_ACCOUNTS_DIR/work/commands/handoff.md" ]]'
 
+# shared accounts never get a stray copy of history
+"$BIN" add fresh >/dev/null 2>&1; rm -f "$CLAUDE_ACCOUNTS_DIR/fresh/projects"
+out="$(tty_run "$BIN" handoff fresh 11111111-1111-1111-1111-111111111111)"
+ok "handoff to a shared account links history instead of copying" '[[ -L "$CLAUDE_ACCOUNTS_DIR/fresh/projects" && "$out" != *"Copied"* && "$out" == *"ARGS=--resume 11111111"* ]]'
+
 # private history
 "$BIN" add client --private >/dev/null 2>&1
 ok "add --private gives the account its own history" '[[ -d "$CLAUDE_ACCOUNTS_DIR/client/projects" && ! -L "$CLAUDE_ACCOUNTS_DIR/client/projects" && -e "$CLAUDE_ACCOUNTS_DIR/client/.private" && -L "$CLAUDE_ACCOUNTS_DIR/client/settings.json" ]]'

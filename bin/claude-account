@@ -7,7 +7,7 @@
 # with ~/.claude by symlink; only the login and ~/.claude.json are per account.
 set -euo pipefail
 
-VERSION=0.4.0
+VERSION=0.4.1
 BASE="${CLAUDE_ACCOUNTS_DIR:-$HOME/.claude-accounts}"
 MAIN="$HOME/.claude"
 SHARED=(settings.json settings.local.json CLAUDE.md agents skills plugins projects commands hooks)
@@ -822,6 +822,8 @@ ensure_transcript() {
   local sid="$1" dir="$2" src dest
   src="$(session_file "$sid")"
   [[ -n "$src" ]] || return 0
+  # A shared account must point at the shared history before we compare.
+  [[ "$dir" == "$MAIN" ]] || { mkdir -p "$MAIN/projects"; link_shared "$dir"; }
   dest="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$dir/projects")/$(basename "$(dirname "$src")")"
   [[ "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$(dirname "$src")")" == "$dest" ]] && return 0
   [[ -e "$dest/$sid.jsonl" ]] && return 0
@@ -943,7 +945,9 @@ start_from_brief() {
   [[ -s "$file" ]] || { echo "Brief not found or empty: $file" >&2; exit 1; }
   if [[ "$target" == codex ]]; then
     local cdir="${CODEX_ACCOUNT_DIR:-$MAIN}"
-    echo "Codex account: $(account_label "$cdir") ($(codex_email "$(codex_home_of "$cdir")"))"
+    local ce; ce="$(codex_email "$(codex_home_of "$cdir")")"
+    [[ "$ce" == \(* ]] || ce="($ce)"
+    echo "Codex account: $(account_label "$cdir") $ce"
     codex_run "$cdir" "$(seed_prompt "$file")"
   fi
   run "$target" "$(seed_prompt "$file")"
@@ -1219,7 +1223,7 @@ case "$cmd" in
       fi
     elif [[ "$1" == --clear ]]; then
       if [[ -e "$PWD/.claude-account" ]]; then
-        rm -f "$PWD/.claude-account"; echo "Unpinned $PWD"
+        rm -f "$PWD/.claude-account"; echo "Unpinned ${PWD/#$HOME/~}"
       else
         echo "No .claude-account in $PWD" >&2
       fi
@@ -1229,7 +1233,7 @@ case "$cmd" in
       name="$1"
       [[ "$name" == main ]] || { valid "$name"; [[ -d "$BASE/$name" ]] || { echo "No profile $name" >&2; exit 1; }; }
       printf '# claude-account: Claude Code sessions in this folder use this account\n%s\n' "$name" > "$PWD/.claude-account"
-      echo "Pinned $PWD to '$name' ($(email_of "$( [[ "$name" == main ]] && echo "$HOME" || echo "$BASE/$name")"))"
+      echo "Pinned ${PWD/#$HOME/~} to '$name' ($(email_of "$( [[ "$name" == main ]] && echo "$HOME" || echo "$BASE/$name")"))"
       if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && ! git check-ignore -q "$PWD/.claude-account" 2>/dev/null; then
         ex="$(git rev-parse --git-path info/exclude)"
         mkdir -p "$(dirname "$ex")"; echo ".claude-account" >> "$ex"

@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-12
+
+### Fixed
+- Handing off or switching to a shared account whose history link was missing
+  (for example, added before `~/.claude/projects` existed) copied the
+  conversation into a separate, unmarked history. It now links the shared
+  history first.
+- "Codex account: main ((not signed in))" double brackets.
+- `pin` shows `~` paths.
+
+### Changed
+- Demo GIF re-recorded: `list` with Codex logins, `whoami`, `switch`, `pin`
+  (inside and outside the pinned folder) and `handoff codex` on the pinned
+  account's Codex login.
+
 ## [0.4.0] - 2026-10-12
 
 ### Added
@@ -84,7 +99,8 @@ All notable changes to this project are documented here. The format follows
 - `/handoff` slash command via `install-command`; `save-brief`, `briefs`.
 - Secret redaction in condensed transcripts.
 
-[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/orvi2014/claude-account/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/orvi2014/claude-account/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/orvi2014/claude-account/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/orvi2014/claude-account/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/orvi2014/claude-account/compare/v0.1.0...v0.2.0

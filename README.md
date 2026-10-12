@@ -9,7 +9,7 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 `claude-account` keeps each Claude Code account signed in at the same time and moves work between them — by resuming a conversation, or by starting a fresh session from a compact, repository-aware handoff brief. The same brief can restart an overgrown session on the same account, or seed an OpenAI Codex session.
 
 <p align="center">
-  <img src="demo/demo.gif" alt="claude-account: listing accounts, checking the active one with whoami, switching a conversation to another account, setting the default, writing a handoff brief and handing the task to Codex" width="900">
+  <img src="demo/demo.gif" alt="claude-account: listing accounts and their Codex logins, checking the active one with whoami, switching a conversation to another account, pinning a folder so claude starts on that account inside it and on the default outside it, and handing the task to Codex on the pinned account's Codex login" width="900">
 </p>
 
 <sub>Recorded in a sandbox with example accounts and a stand-in for <code>claude</code>; reproduce with <code>bash demo/setup.sh && vhs demo/demo.tape</code>.</sub>
@@ -382,7 +382,7 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 ## Development
 
 ```sh
-bash tests/run.sh                          # 129 tests
+bash tests/run.sh                          # 130 tests
 bash demo/setup.sh && vhs demo/demo.tape   # re-record the demo GIF (requires vhs)
 ```
 
