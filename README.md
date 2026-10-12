@@ -263,6 +263,7 @@ A brief is Markdown with fixed sections:
 | Done (verified) | Completed work with evidence: pull requests, commits, deploys, test results |
 | In flight | The step in progress when the session stopped |
 | Decisions and constraints | Choices and rules the user set, quoted when strict |
+| Tried and rejected | Approaches that were tried or considered and dropped, with the reason, so they are not repeated |
 | Key pointers | Repositories, branches, files, commands, URLs and IDs |
 | Open questions / blockers | Anything blocked or waiting on the user |
 | Next step | One or two concrete first actions |
@@ -308,7 +309,7 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 ## Development
 
 ```sh
-bash tests/run.sh                          # 76 tests
+bash tests/run.sh                          # 77 tests
 bash demo/setup.sh && vhs demo/demo.tape   # re-record the demo GIF (requires vhs)
 ```
 

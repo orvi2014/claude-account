@@ -205,6 +205,7 @@ ok "brief input has summary, kept tail and new work" 'grep -q summary-marker "$F
 ok "brief input drops reminders and side chains" '! grep -q secret-reminder "$FAKE_LOG.stdin" && ! grep -q sidechain-marker "$FAKE_LOG.stdin"'
 ok "brief input redacts secrets" '! grep -q -e Hunter2xyz -e sk-ant-abcdef -e eyJhbGci "$FAKE_LOG.stdin" && grep -q "password: \[redacted\]" "$FAKE_LOG.stdin"'
 ok "brief replaces the system prompt, no tools" 'grep -q -- "--system-prompt" "$FAKE_LOG.brief" && grep -q -- "--tools" "$FAKE_LOG.brief"'
+ok "brief asks for tried-and-rejected approaches" 'grep -q "## Tried and rejected" "$FAKE_LOG.brief"'
 ok "brief for main bills main (unset)" 'grep -q "CONFIG=<unset>" "$FAKE_LOG.brief"'
 
 # handoff --brief
@@ -254,7 +255,7 @@ ok "--from rejects a missing file" '[[ "$(tty_run "$BIN" handoff work --from /no
 # install-command
 "$BIN" install-command >/dev/null
 ok "install-command writes /switch" 'grep -q "claude-account switch \$ARGUMENTS" "$HOME/.claude/commands/switch.md"'
-ok "install-command writes /handoff" '[[ -f "$HOME/.claude/commands/handoff.md" ]] && grep -q "claude-account save-brief" "$HOME/.claude/commands/handoff.md" && grep -q "\$ARGUMENTS" "$HOME/.claude/commands/handoff.md"'
+ok "install-command writes /handoff" '[[ -f "$HOME/.claude/commands/handoff.md" ]] && grep -q "## Tried and rejected" "$HOME/.claude/commands/handoff.md" && grep -q "claude-account save-brief" "$HOME/.claude/commands/handoff.md" && grep -q "\$ARGUMENTS" "$HOME/.claude/commands/handoff.md"'
 ok "install-command will not overwrite" '! "$BIN" install-command >/dev/null 2>&1'
 ok "install-command --force overwrites" '"$BIN" install-command --force >/dev/null'
 tty_run "$BIN" use work >/dev/null

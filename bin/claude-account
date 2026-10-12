@@ -398,6 +398,8 @@ Finished work with evidence: PRs, commits, deploys, test results. Only what the 
 The exact step that was in progress when the session stopped, and its state.
 ## Decisions and constraints
 Choices the user made, rules they set, things not to do. Quote the user for anything strict.
+## Tried and rejected
+Approaches, fixes or ideas that were tried or considered and abandoned, each with the reason (error, failing test, user said no, too slow), so the next agent does not repeat them. Write "None" if the transcript shows none.
 ## Key pointers
 Repos, branches, files, commands, URLs, IDs the next agent needs. Paths and names, not contents.
 ## Open questions / blockers
@@ -695,9 +697,12 @@ Use exactly these Markdown sections:
 ## Done (verified)
 ## In flight
 ## Decisions and constraints
+## Tried and rejected
 ## Key pointers
 ## Open questions / blockers
 ## Next step
+
+Under "Tried and rejected", list approaches that were tried or considered and abandoned, each with why (the error, the failing test, the user's objection), so the next agent does not repeat them; write "None" if there were none.
 
 Be specific and terse. Only state what actually happened in this session or what the repository shows. Quote the user for strict rules. Never include passwords, API keys or tokens.
 
