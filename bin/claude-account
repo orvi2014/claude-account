@@ -7,6 +7,7 @@
 # with ~/.claude by symlink; only the login and ~/.claude.json are per account.
 set -euo pipefail
 
+VERSION=0.2.0
 BASE="${CLAUDE_ACCOUNTS_DIR:-$HOME/.claude-accounts}"
 MAIN="$HOME/.claude"
 SHARED=(settings.json settings.local.json CLAUDE.md agents skills plugins projects commands hooks)
@@ -33,6 +34,8 @@ Usage: claude-account <command> [name] [claude args...]
                       print that hook (setup-shell installs it for you)
   login <name>        sign in (or re-sign in) to that account
   list                show profiles and the email each is signed in as
+  whoami              which account this shell (or Claude session) is on, and
+                      which one a new 'claude' starts on
   remove <name>       delete a profile and its saved login
   main [args]         start Claude with the main account (~/.claude)
   sessions [n]        recent conversations in this folder, and which are open
@@ -246,7 +249,7 @@ switch_in_pane() {
   else
     rm -f "$job"; return 1
   fi
-  tmux run-shell -b "bash $(printf %q "$go")"
+  tmux run-shell -b "bash $(printf %q "$go")" || { rm -f "$job" "$go"; return 1; }
 }
 
 # stop_session <pid>: ask Claude to exit (SIGTERM) and wait for it.
@@ -741,7 +744,7 @@ pick_session() {
 case "$cmd" in
   add)
     name="${1:?name required}"; valid "$name"
-    case "$name" in main|codex|help|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
+    case "$name" in main|codex|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
       echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
     dir="$(dir_of "$name")"
     [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
@@ -941,7 +944,7 @@ case "$cmd" in
     [[ "$name" == main ]] && { echo "Refusing to remove the default account" >&2; exit 1; }
     dir="$(dir_of "$name")"
     [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
-    read -r -p "Delete profile $name and its saved login? [y/N] " ok
+    read -r -p "Delete profile $name and its saved login? [y/N] " ok || ok=n
     [[ "$ok" == y || "$ok" == Y ]] || exit 0
     CLAUDE_CONFIG_DIR="$dir" claude auth logout >/dev/null 2>&1 || true
     [[ "$(default_name)" == "$name" ]] && rm -f "$DEFAULT_FILE"
@@ -952,6 +955,22 @@ case "$cmd" in
   main)
     run "$MAIN" "$@"
     ;;
+  whoami|current)
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+      cur="$CLAUDE_CONFIG_DIR"; cfg="$cur"
+    else
+      cur="$MAIN"; cfg="$HOME"
+    fi
+    printf "%-16s %s\n" "$(account_label "$cur")" "$(email_of "$cfg")$( [[ -n "${CLAUDECODE:-}" ]] && echo "  (this Claude session)" || echo "  (this shell)")"
+    def="$(default_name)"
+    sh="$(user_shell 2>/dev/null || true)"
+    if [[ "$def" != main && -n "$sh" ]] && ! hook_installed "$sh"; then
+      echo "new 'claude' sessions: main (default '$def' is set, but the shell hook is missing: claude-account setup-shell)"
+    else
+      echo "new 'claude' sessions: $def"
+    fi
+    ;;
+  -V|--version|version) echo "claude-account $VERSION" ;;
   ""|-h|--help|help) usage ;;
   *) echo "Unknown command: $cmd" >&2; usage; exit 1 ;;
 esac

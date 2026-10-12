@@ -91,6 +91,12 @@ ok "use sets CLAUDE_CONFIG_DIR" '[[ "$(tty_run "$BIN" use work --continue)" == *
 ok "bare name works like use" '[[ "$(tty_run "$BIN" work)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
 ok "main runs with CLAUDE_CONFIG_DIR unset" '[[ "$(tty_run "$BIN" main)" == *"CONFIG=<unset>"* ]]'
 
+# whoami / version
+ok "whoami shows the main account by default" '[[ "$("$BIN" whoami)" == "main"*"me@example.com"* ]]'
+ok "whoami follows CLAUDE_CONFIG_DIR" '[[ "$(CLAUDE_CONFIG_DIR="$CLAUDE_ACCOUNTS_DIR/work" "$BIN" whoami | head -1)" == work* ]]'
+ok "--version prints the version" '[[ "$("$BIN" --version)" == "claude-account "[0-9]* ]]'
+ok "remove without input does not crash" '"$BIN" remove work </dev/null >/dev/null 2>&1; [[ -d "$CLAUDE_ACCOUNTS_DIR/work" ]]'
+
 # sessions
 ok "sessions lists newest first" '[[ "$("$BIN" sessions | sed -n 2p)" == *22222222* ]]'
 ok "sessions shows first message" '[[ "$("$BIN" sessions)" == *"second task"* ]]'

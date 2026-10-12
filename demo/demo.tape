@@ -3,7 +3,7 @@ Output demo/demo.gif
 Set Shell "bash"
 Set FontSize 14
 Set Width 1280
-Set Height 680
+Set Height 720
 Set Padding 24
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 35ms
@@ -16,10 +16,17 @@ Show
 
 Type "claude-account list" Sleep 400ms Enter
 Sleep 1.8s
-Type "claude-account sessions" Sleep 400ms Enter
+Type "claude-account whoami" Sleep 400ms Enter
+Sleep 2s
+Type "claude-account switch work" Sleep 400ms Enter
+Sleep 3s
+Type "claude-account default work" Sleep 400ms Enter
+Sleep 1.5s
+Type "claude" Sleep 400ms Enter
 Sleep 2.5s
-Type "claude-account brief" Sleep 400ms Enter
-Sleep 9s
 Type "clear" Enter
-Type "claude-account handoff work --brief" Sleep 400ms Enter
-Sleep 8s
+Type "claude-account brief" Sleep 400ms Enter
+Sleep 7s
+Type "clear" Enter
+Type "claude-account handoff codex" Sleep 400ms Enter
+Sleep 5s

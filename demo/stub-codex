@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stand-in for `codex` used only to record the demo.
+printf '\n\033[38;5;75m◆ Codex\033[0m  \033[2mfresh session, started from the handoff brief (%s lines)\033[0m\n\n' "$(printf '%s' "$1" | wc -l | tr -d ' ')"
+printf '> Reading the brief. Skipping toFixed(2) per line (already rejected); checking PR #128…\n'

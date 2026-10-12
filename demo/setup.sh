@@ -7,7 +7,7 @@ DEMO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 S="${1:-/tmp/claude-account-demo}"
 rm -rf "${S:?}"; mkdir -p "$S/bin" "$S/home/.claude/projects" "$S/billing"
 ln -s "$DEMO_ROOT/../bin/claude-account" "$S/bin/claude-account"
-cp "$DEMO_ROOT/stub-claude" "$S/bin/claude"; cp "$DEMO_ROOT/stub-gh" "$S/bin/gh"; chmod +x "$S/bin/"*
+cp "$DEMO_ROOT/stub-claude" "$S/bin/claude"; cp "$DEMO_ROOT/stub-gh" "$S/bin/gh"; cp "$DEMO_ROOT/stub-codex" "$S/bin/codex"; chmod +x "$S/bin/"*
 echo '{}' > "$S/home/.claude/settings.json"
 echo '{"oauthAccount":{"emailAddress":"personal@example.com"}}' > "$S/home/.claude.json"
 mkdir -p "$S/home/.claude-accounts/work"
@@ -35,7 +35,11 @@ touch -t 202610110900 "$P/4c1e9a2b-7d3f-4e8a-9b1c-2f6d8e0a5c3b.jsonl"
 cat > "$S/env.sh" <<ENV
 export DEMO_ROOT="$DEMO_ROOT" HOME="$S/home" CLAUDE_ACCOUNTS_DIR="$S/home/.claude-accounts"
 export PATH="$S/bin:\$PATH" PS1='\[\e[38;5;108m\]~/billing\[\e[0m\] \$ '
-unset CLAUDE_CONFIG_DIR
+export SHELL=/bin/bash
+unset CLAUDE_CONFIG_DIR CLAUDECODE CLAUDE_CODE_SESSION_ID TMUX TMUX_PANE
+eval "\$(claude-account shell-init bash)"
 cd "$S/billing"
 ENV
+# Mark the shell hook as installed so `default` does not offer to add it.
+printf '# >>> claude-account >>>\n# <<< claude-account <<<\n' > "$S/home/.bash_profile"
 echo "$S"

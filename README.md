@@ -9,7 +9,7 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 `claude-account` keeps each Claude Code account signed in at the same time and moves work between them — by resuming a conversation, or by starting a fresh session from a compact, repository-aware handoff brief. The same brief can restart an overgrown session on the same account, or seed an OpenAI Codex session.
 
 <p align="center">
-  <img src="demo/demo.gif" alt="claude-account: listing accounts and sessions, writing a handoff brief, and starting a fresh session on another account" width="900">
+  <img src="demo/demo.gif" alt="claude-account: listing accounts, checking the active one with whoami, switching a conversation to another account, setting the default, writing a handoff brief and handing the task to Codex" width="900">
 </p>
 
 <sub>Recorded in a sandbox with example accounts and a stand-in for <code>claude</code>; reproduce with <code>bash demo/setup.sh && vhs demo/demo.tape</code>.</sub>
@@ -29,6 +29,7 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 - [Security and privacy](#security-and-privacy)
 - [Limitations](#limitations)
 - [Development](#development)
+- [Changelog](#changelog)
 - [License](#license)
 
 ---
@@ -145,7 +146,7 @@ claude-account use work             # or simply: claude-account work
 claude-account main                 # back to the main account (~/.claude)
 ```
 
-Run each in its own terminal to use both at once. Inside Claude Code, `/status` shows the active account.
+Run each in its own terminal to use both at once. `claude-account whoami` shows which account the current shell or Claude session is on, and which one a new `claude` starts on (inside Claude Code, `! claude-account whoami` or `/status`).
 
 **Switch the account of the current conversation**
 
@@ -218,6 +219,8 @@ claude-account brief --edit                    # write, review and print a brief
 | `setup-shell [--remove] [--shell zsh\|bash\|fish]` | Install or remove the hook that makes plain `claude` follow the default. |
 | `shell-init [zsh\|bash\|fish]` | Print that hook. |
 | `list` | List accounts and the email each is signed in as. |
+| `whoami` | Show the account this shell or session is on, and the one new sessions start on. |
+| `--version` | Print the version. |
 | `login <name>` | Sign an account in again. |
 | `remove <name>` | Sign out and delete a profile; shared files are kept. |
 | `sessions [n]` | Recent conversations in the current folder and where each is open. |
@@ -309,13 +312,17 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 ## Development
 
 ```sh
-bash tests/run.sh                          # 77 tests
+bash tests/run.sh                          # 81 tests
 bash demo/setup.sh && vhs demo/demo.tape   # re-record the demo GIF (requires vhs)
 ```
 
 The test suite is self-contained: a temporary `HOME`, stand-in `claude`, `codex`, `gh`, `tmux` and editor executables, and synthetic session files. It never touches your real configuration or credentials. CI runs it on Ubuntu and macOS.
 
 Issues and pull requests are welcome.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
