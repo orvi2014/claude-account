@@ -510,7 +510,7 @@ ok "usage never prints a token" '[[ "$out" != *SECRET* && "$out" != *sk-ant* ]]'
 ok "usage --json for one account" '"$BIN" usage work --json | python3 -c "import json,sys;d=json.load(sys.stdin);assert d[0][\"account\"]==\"work\" and d[0][\"usage\"][\"five_hour\"][\"utilization\"]==12.0"'
 echo '{"five_hour":{"utilization":99}}' > "$T/usage.json"
 ok "usage is cached for a few minutes" '[[ "$("$BIN" usage work)" == *"12%"* ]]'
-ok "the usage cache holds no tokens" '! grep -q sk-ant "$CLAUDE_ACCOUNTS_DIR/.usage-cache.json" && [[ "$(stat -f %Lp "$CLAUDE_ACCOUNTS_DIR/.usage-cache.json" 2>/dev/null || stat -c %a "$CLAUDE_ACCOUNTS_DIR/.usage-cache.json")" == 600 ]]'
+ok "the usage cache holds no tokens" '! grep -q sk-ant "$CLAUDE_ACCOUNTS_DIR/.usage-cache.json" && [[ "$(python3 -c "import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" "$CLAUDE_ACCOUNTS_DIR/.usage-cache.json")" == 0o600 ]]'
 ok "usage refuses an unknown account" '! "$BIN" usage nope >/dev/null 2>&1'
 unset HATSWAP_FAKE_KEYCHAIN HATSWAP_USAGE_URL; rm -f "$T/fake/security"
 
