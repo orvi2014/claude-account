@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `hatswap` on its own opens an account picker: every account with its email,
+  5-hour and weekly use, default and pin. ↑↓ choose, ⏎ start Claude, `d` set
+  the default, `p` pin this folder, `s` continue the last conversation here,
+  `c` Codex, `l` sign in. It draws in place, so it works in tmux; scripts and
+  pipes still get the help text (`HATSWAP_NO_PICKER=1` turns it off).
+- A logo: two top hats turned around the same centre. The README has a header
+  for light and dark mode; `docs/brand/` holds the marks, lockups, app and
+  browser icons and a 1280×640 social card.
+
 ### Fixed
 - `switch` and `handoff` with a session ID now work after Claude's shell has
   moved to another folder (a subfolder or a worktree): hatswap finds the folder

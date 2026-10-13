@@ -8,7 +8,7 @@ BIN="$ROOT/bin/hatswap"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 export HOME="$T/home" CLAUDE_ACCOUNTS_DIR="$T/home/.claude-accounts"
-unset CLAUDE_CONFIG_DIR CLAUDE_CODE_SESSION_ID CLAUDE_PID TMUX TMUX_PANE XDG_CONFIG_HOME ZDOTDIR
+unset CLAUDE_CONFIG_DIR CLAUDE_CODE_SESSION_ID CLAUDE_PID CLAUDECODE TMUX TMUX_PANE XDG_CONFIG_HOME ZDOTDIR
 mkdir -p "$HOME/.claude/projects" "$HOME/.claude/sessions" "$T/fake" "$T/work"
 echo '{}' > "$HOME/.claude/settings.json"
 mkdir -p "$HOME/.claude/agents"
@@ -561,6 +561,22 @@ mkdir -p "$T/elsewhere/wt"
 out="$(cd "$T/elsewhere/wt" && tty_run "$BIN" switch work 44444444-4444-4444-4444-444444444444)"
 ok "switch from another folder finds the session's own folder" '[[ "$out" == *"working from there"* && "$out" == *"ARGS=--resume 44444444"* ]]'
 rm -f "$PROJ/44444444-4444-4444-4444-444444444444.jsonl"
+
+# the account picker (no command, in a terminal)
+"$BIN" default work >/dev/null 2>&1
+mkdir -p "$T/pk"
+ok "picker rows list accounts with default and here flags" '[[ "$(cd "$T/pk" && "$BIN" __pick-rows | awk -F"\t" "\$1==\"work\"{print \$3\$4}")" == 11 ]]'
+out="$(cd "$T/pk" && HATSWAP_PICK_KEYS="p" "$BIN" 2>&1)"
+ok "picker p pins this folder to the selected account" '[[ "$(grep -v "^#" "$T/pk/.hatswap")" == work && "$out" == *"Pinned"* ]]'
+out="$(cd "$T/pk" && HATSWAP_PICK_KEYS="q" "$BIN" 2>&1)"
+ok "picker shows each account and the key help" '[[ "$out" == *"main"*"work"* && "$out" == *"start claude"* ]]'
+"$BIN" default main >/dev/null
+out="$(cd "$T/pk" && HATSWAP_PICK_KEYS="d" "$BIN" 2>&1)"
+ok "picker d makes the selected account the default" '[[ "$("$BIN" default)" == work && "$out" == *"Default is now"* ]]'
+rm -f "$T/pk/.hatswap"; "$BIN" default main >/dev/null
+out="$(cd "$T/pk" && HATSWAP_PICK_KEYS="\\x1b[B\\r" "$BIN" 2>&1 </dev/null)"
+ok "picker enter starts claude on the selected account" '[[ "$out" == *"interactive Claude session"* ]]'
+ok "no command without a terminal still prints help" '[[ "$("$BIN" </dev/null | head -1)" == Usage:* ]]'
 
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'

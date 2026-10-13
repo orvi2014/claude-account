@@ -1,12 +1,17 @@
-# hatswap
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/hatswap-lockup-dark.svg">
+    <img src="docs/brand/hatswap-lockup-light.svg" alt="hatswap" height="72">
+  </picture>
+</h1>
 
-[![test](https://github.com/orvi2014/hatswap/actions/workflows/test.yml/badge.svg)](https://github.com/orvi2014/hatswap/actions/workflows/test.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Platform: macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
+<p align="center"><b>Every client's Claude Code account, signed in at once. Swap mid-conversation.</b></p>
 
-Multiple Claude Code accounts on one machine, with session handoff between them. Wear a different hat for each client.
-
-> **Formerly `claude-account`.** Renamed in 0.5.0 to avoid confusion with an unrelated project of the same name. Old links redirect here, and the `claude-account` command keeps working as an alias. See [Upgrading from claude-account](#upgrading-from-claude-account).
+<p align="center">
+  <a href="https://github.com/orvi2014/hatswap/actions/workflows/test.yml"><img src="https://github.com/orvi2014/hatswap/actions/workflows/test.yml/badge.svg" alt="test"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="Platform: macOS | Linux">
+</p>
 
 `hatswap` keeps each Claude Code account signed in at the same time and moves work between them — by resuming a conversation, or by starting a fresh session from a compact, repository-aware handoff brief. The same brief can restart an overgrown session on the same account, or seed an OpenAI Codex session.
 
@@ -44,6 +49,7 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 - **Switch in place.** `switch` moves the current conversation to another account. In tmux (including desktop apps that host tabs in tmux), Terminal.app and iTerm2, the same tab restarts on the new login with its history intact.
 - **Default account.** `default` (or `--default`) picks the account plain `claude` starts on; `setup-shell` installs the one-line hook for zsh, bash or fish.
 - **Per-folder accounts.** `pin acme` in a client's folder and every `claude` started there uses that client's account.
+- **Account picker.** Type `hatswap` on its own for a list of every account with its email, limits, default and pin; pick one with the arrow keys and start Claude, set the default or pin the folder with one key.
 - **Usage per account.** `usage` shows every account's 5-hour and weekly limits in one table, the numbers `/usage` shows inside Claude.
 - **Account in the status line.** `statusline --install` puts the account and email at the bottom of every session, ahead of any status line you already have.
 - **VS Code, Cursor and Claude Desktop.** `vscode acme` makes the Claude extension use acme's login in that folder; `desktop acme` opens Claude Desktop signed in as acme, in its own window.
@@ -155,6 +161,8 @@ hatswap install-command
 This adds `~/.claude/commands/handoff.md` and `switch.md`, which every account shares. In any Claude Code session you can then run `/switch work`, `/handoff work`, `/handoff codex` or `/handoff`.
 
 ### Upgrading from claude-account
+
+> **Formerly `claude-account`.** Renamed in 0.5.0 to avoid confusion with an unrelated project of the same name. Old links redirect here, and the `claude-account` command keeps working as an alias.
 
 ```sh
 claude-account update        # installs hatswap next to it; claude-account becomes an alias
@@ -285,6 +293,21 @@ hatswap private acme --off    # share history again (only while its own history 
 
 By default every account shares conversation history. A private account keeps its conversations and memory in its own `projects/` folder, so other accounts never read them; settings, skills and MCP servers are still shared. `sessions`, `brief` and `handoff` see private conversations too. When you deliberately hand one to another account, it is copied into that account's history and the command says so.
 
+**Pick an account from a list**
+
+Type `hatswap` with nothing after it in a terminal:
+
+```
+hatswap ─ new sessions in ~/clients/acme start on acme
+
+   main     you@personal.com    5h    0% ░░░░░░  week  100% ██████
+ ▸ acme     you@acme.com        5h   10% █░░░░░  week   27% ██░░░░  ★ default  codex
+
+ ↑↓ choose   ⏎ start claude   d default   p pin folder   s continue last chat   c codex   l sign in   q quit
+```
+
+It draws in place rather than taking over the screen, so it behaves in tmux and terminal apps. Scripts, pipes and `!` inside Claude still get the help text; `HATSWAP_NO_PICKER=1` turns it off.
+
 **See every account's limits**
 
 ```sh
@@ -353,6 +376,7 @@ hatswap brief --edit                    # write, review and print a brief withou
 | `codex-login <name\|main>` | Sign an account in to its own Codex login. |
 | `codex <name\|main> [codex args…]` | Start Codex on that account's Codex login. |
 | `use <name> [--default] [claude args…]` | Start Claude Code on an account. `hatswap <name>` is equivalent. `--default` also makes it the default. |
+| *(no command)* | In a terminal: the account picker. Otherwise the help text. |
 | `exec [--account <name\|main>] <command> [args…]` | Run a command (`claude`, `codex`, a bot) on the account a new session would get now: `--account`, then `HATSWAP_ACCOUNT`, then the folder pin, then the default. No terminal needed. |
 | `usage [name…] [--json]` | Each account's 5-hour and weekly limits and reset times. Read-only. |
 | `statusline [--install\|--remove]` | Show the account in Claude Code's status line, keeping an existing one. |

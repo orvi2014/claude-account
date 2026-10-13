@@ -30,6 +30,11 @@ usage() {
   cat <<EOF
 Usage: hatswap <command> [name] [claude args...]
 
+  (no command)        in a terminal: pick an account from a list showing each
+                      one's email, limits, default and pin. ↑↓ choose, ⏎ start
+                      Claude, d default, p pin this folder, s continue the
+                      last conversation here, c Codex, l sign in, q quit
+
   add <name> [--email you@x.com] [--console] [--private] [--codex]
                       create an account profile, then sign in to it.
                       --private keeps its conversation history to itself;
@@ -920,6 +925,199 @@ os.replace(path + ".tmp", path)
 PY
 }
 
+# pick_rows: one line per account for the picker:
+# label, email, default?, new-session-here?, private?, codex email, signed-in?
+pick_rows() {
+  local def here d n e cx
+  def="$(default_name)"; here="$(new_session_account | cut -f1)"
+  while IFS= read -r d; do
+    n="$(account_label "$d")"
+    e="$(email_of "$( [[ "$d" == "$MAIN" ]] && echo "$HOME" || echo "$d")")"
+    cx=""; codex_signed_in "$d" && cx="$(codex_email "$(codex_home_of "$d")")"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$e" \
+      "$( [[ "$n" == "$def" ]] && echo 1 || echo 0)" "$( [[ "$n" == "$here" ]] && echo 1 || echo 0)" \
+      "$(is_private "$d" && echo 1 || echo 0)" "$cx"
+  done < <(account_dirs)
+}
+
+# picker: the interactive account list. Prints "<action>\t<account>" for the
+# caller to run (start, switch, codex, login), or nothing on quit. Default and
+# pin are applied in place. HATSWAP_PICK_KEYS feeds keys for tests.
+picker() {
+  local self; self="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")"
+  python3 - "$self" "$PWD" "$HOME" <<'PY'
+import json, os, re, subprocess, sys, threading, time
+self, cwd, home = sys.argv[1:4]
+fed = os.environ.get("HATSWAP_PICK_KEYS")
+tty_in = None if fed is not None else open("/dev/tty", "rb", buffering=0)
+out = open("/dev/tty", "w") if fed is None else sys.stderr
+
+ACC = "\033[38;2;217;119;87m"   # Claude orange
+DIM, BOLD, RST = "\033[2m", "\033[1m", "\033[0m"
+GRN, YEL, RED = "\033[32m", "\033[33m", "\033[31m"
+
+def run(*a):
+    return subprocess.run([self, *a], capture_output=True, text=True)
+
+def rows():
+    r = run("__pick-rows")
+    res = []
+    for line in r.stdout.splitlines():
+        p = line.split("\t")
+        if len(p) >= 6:
+            res.append(dict(name=p[0], email=p[1], default=p[2] == "1", here=p[3] == "1", private=p[4] == "1", codex=p[5]))
+    return res
+
+state = {"rows": rows(), "usage": {}, "loading": True, "msg": ""}
+names = [r["name"] for r in state["rows"]]
+sel = next((i for i, r in enumerate(state["rows"]) if r["here"]), 0)
+
+def load_usage():
+    try:
+        d = json.loads(run("usage", "--json").stdout or "[]")
+        state["usage"] = {x["account"]: x for x in d}
+    except Exception:
+        pass
+    state["loading"] = False
+    if fed is None:
+        draw()
+
+def bar(w):
+    if not w or w.get("utilization") is None:
+        return f"{DIM}  —  {'·' * 6}{RST}"
+    u = float(w["utilization"])
+    col = GRN if u < 50 else YEL if u < 80 else RED
+    n = min(6, int(round(u / 100 * 6)))
+    return f"{col}{u:4.0f}% {'█' * n}{DIM}{'░' * (6 - n)}{RST}"
+
+def visible(s):
+    return len(re.sub(r"\033\[[0-9;]*m", "", s))
+
+def fit(s, width):
+    if visible(s) <= width:
+        return s
+    outp, n, i = "", 0, 0
+    while i < len(s) and n < width - 1:
+        m = re.match(r"\033\[[0-9;]*m", s[i:])
+        if m:
+            outp += m.group(0); i += len(m.group(0)); continue
+        outp += s[i]; n += 1; i += 1
+    return outp + "…" + RST
+
+drawn = 0
+lock = threading.Lock()
+def draw():
+    global drawn
+    with lock:
+        try:
+            width = os.get_terminal_size(out.fileno()).columns
+        except Exception:
+            width = 0
+        if width < 40:
+            width = 100
+        rs = state["rows"]
+        here = next((r["name"] for r in rs if r["here"]), "main")
+        lines = [f"{ACC}{BOLD}hatswap{RST}{DIM} ─ new sessions in {cwd.replace(home, '~', 1)} start on {RST}{BOLD}{here}{RST}", ""]
+        nw = max([len(r["name"]) for r in rs] + [4])
+        ew = max([len(r["email"]) for r in rs] + [5])
+        ew = min(ew, 32)
+        for i, r in enumerate(rs):
+            u = state["usage"].get(r["name"], {})
+            us = u.get("usage") or {}
+            tags = []
+            if r["default"]: tags.append(f"{ACC}★ default{RST}")
+            if r["here"] and not r["default"]: tags.append(f"{ACC}● here{RST}")
+            if r["private"]: tags.append(f"{DIM}private{RST}")
+            if r["codex"]: tags.append(f"{DIM}codex{RST}")
+            note = u.get("note")
+            if note and "expired" in note: tags.append(f"{YEL}login expired{RST}")
+            elif note and "not signed in" in note: tags.append(f"{DIM}no Claude login{RST}")
+            usage = f"{DIM}5h{RST} {bar(us.get('five_hour'))}  {DIM}week{RST} {bar(us.get('seven_day'))}" if not state["loading"] or us else f"{DIM}reading usage…{RST}"
+            cur = i == sel
+            mark = f"{ACC}▸{RST}" if cur else " "
+            name = f"{BOLD}{r['name']:<{nw}}{RST}" if cur else f"{r['name']:<{nw}}"
+            email = r["email"][:ew]
+            lines.append(fit(f" {mark} {name}  {DIM if not cur else ''}{email:<{ew}}{RST}  {usage}  {'  '.join(tags)}", width))
+        lines.append("")
+        keys = [("↑↓", "choose"), ("⏎", "start claude"), ("d", "default"), ("p", "pin folder"), ("s", "continue last chat"), ("c", "codex"), ("l", "sign in"), ("q", "quit")]
+        lines.append(fit(" " + "   ".join(f"{ACC}{k}{RST} {DIM}{v}{RST}" for k, v in keys), width))
+        lines.append(fit(f" {state['msg']}" if state["msg"] else "", width))
+        buf = ("\033[%dA" % drawn if drawn else "") + "".join("\r\033[2K" + l + "\n" for l in lines)
+        out.write(buf); out.flush()
+        drawn = len(lines)
+
+def keys():
+    if fed is not None:
+        seq = fed.encode().decode("unicode_escape")
+        i = 0
+        while i < len(seq):
+            if seq[i] == "\x1b" and seq[i:i + 3] in ("\x1b[A", "\x1b[B"):
+                yield seq[i:i + 3]; i += 3
+            else:
+                yield seq[i]; i += 1
+        yield "q"
+        return
+    while True:
+        c = os.read(tty_in.fileno(), 1)
+        if c == b"\x1b":
+            import select
+            if select.select([tty_in], [], [], 0.05)[0]:
+                c += os.read(tty_in.fileno(), 2)
+        yield c.decode(errors="ignore")
+
+old = None
+if fed is None:
+    import termios, tty
+    old = termios.tcgetattr(tty_in.fileno())
+    tty.setcbreak(tty_in.fileno())
+    out.write("\033[?25l")
+    threading.Thread(target=load_usage, daemon=True).start()
+else:
+    load_usage()
+result = ""
+try:
+    draw()
+    for k in keys():
+        name = state["rows"][sel]["name"]
+        if k in ("\x1b[A", "k"):
+            sel = (sel - 1) % len(state["rows"])
+        elif k in ("\x1b[B", "j"):
+            sel = (sel + 1) % len(state["rows"])
+        elif k in ("\r", "\n"):
+            result = f"start\t{name}"; break
+        elif k == "s":
+            result = f"switch\t{name}"; break
+        elif k == "c":
+            row = state["rows"][sel]
+            if row["codex"] or name == "main":
+                result = f"codex\t{name}"; break
+            state["msg"] = f"{YEL}{name} has no Codex login. Press l to sign in to Claude, or run: hatswap codex-login {name}{RST}"
+        elif k == "l":
+            if name == "main":
+                state["msg"] = f"{DIM}main signs in with plain 'claude' (/login inside it){RST}"
+            else:
+                result = f"login\t{name}"; break
+        elif k == "d":
+            r = run("default", name)
+            state["msg"] = f"{GRN}✓{RST} Default is now {BOLD}{name}{RST}" if r.returncode == 0 else f"{RED}{(r.stderr or r.stdout).strip()}{RST}"
+            state["rows"] = rows()
+        elif k == "p":
+            r = run("pin", name)
+            state["msg"] = f"{GRN}✓{RST} Pinned {cwd.replace(home, '~', 1)} to {BOLD}{name}{RST}" if r.returncode == 0 else f"{RED}{(r.stderr or r.stdout).strip()}{RST}"
+            state["rows"] = rows()
+        elif k in ("q", "\x1b", "\x03", "\x04"):
+            break
+        else:
+            continue
+        draw()
+finally:
+    if old is not None:
+        termios.tcsetattr(tty_in.fileno(), termios.TCSADRAIN, old)
+        out.write("\033[?25h"); out.flush()
+print(result)
+PY
+}
+
 need_tty() {
   [[ -t 0 && -t 1 ]] && return 0
   echo "This opens an interactive Claude session; run it in a normal terminal tab (not with ! inside Claude)." >&2
@@ -1431,7 +1629,7 @@ pick_session() {
 case "$cmd" in
   add)
     name="${1:?name required}"; valid "$name"
-    case "$name" in main|hatswap|exec|shim|bin|usage|statusline|vscode|desktop|codex|codex-login|private|update|pin|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
+    case "$name" in main|hatswap|pick|exec|shim|bin|usage|statusline|vscode|desktop|codex|codex-login|private|update|pin|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
       echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
     dir="$(dir_of "$name")"
     [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
@@ -1874,6 +2072,21 @@ case "$cmd" in
     fi
     ;;
   -V|--version|version) echo "hatswap $VERSION" ;;
-  ""|-h|--help|help) usage ;;
+  ""|pick)
+    if [[ "$cmd" == pick || -n "${HATSWAP_PICK_KEYS+x}" ]] || [[ -z "${HATSWAP_NO_PICKER:-}" && -t 0 && -t 1 && -z "${CLAUDECODE:-}" ]]; then
+      choice="$(picker)" || exit 1
+      [[ -n "$choice" ]] || exit 0
+      act="${choice%%$'\t'*}"; name="${choice#*$'\t'}"
+      case "$act" in
+        start) exec "$0" use "$name" ;;
+        switch) exec "$0" switch "$name" ;;
+        codex) exec "$0" codex "$name" ;;
+        login) exec "$0" login "$name" ;;
+      esac
+    fi
+    usage
+    ;;
+  __pick-rows) pick_rows ;;
+  -h|--help|help) usage ;;
   *) echo "Unknown command: $cmd" >&2; usage; exit 1 ;;
 esac
