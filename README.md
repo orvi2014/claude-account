@@ -44,6 +44,7 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 - **Switch in place.** `switch` moves the current conversation to another account. In tmux (including desktop apps that host tabs in tmux), Terminal.app and iTerm2, the same tab restarts on the new login with its history intact.
 - **Default account.** `default` (or `--default`) picks the account plain `claude` starts on; `setup-shell` installs the one-line hook for zsh, bash or fish.
 - **Per-folder accounts.** `pin acme` in a client's folder and every `claude` started there uses that client's account.
+- **Bots follow the default.** `exec` (or the `claude`/`codex` shims from `shim`) looks the account up on every call, so a long-running bot that starts `claude -p` per job moves to a new default without a restart.
 - **Codex per account.** Each account can have its own Codex login; `handoff codex` uses the one that belongs to the session's account.
 - **Private history.** Accounts can keep their conversations and memory to themselves, for client work that must stay separate.
 - **One-line install and `update`.** The installer sets up `PATH`, the shell hook and the slash commands; outdated slash commands are flagged.
@@ -281,6 +282,19 @@ hatswap private acme --off    # share history again (only while its own history 
 
 By default every account shares conversation history. A private account keeps its conversations and memory in its own `projects/` folder, so other accounts never read them; settings, skills and MCP servers are still shared. `sessions`, `brief` and `handoff` see private conversations too. When you deliberately hand one to another account, it is copied into that account's history and the command says so.
 
+**Run bots and scripts on the current default**
+
+The shell hook only covers `claude` typed in a terminal. A bot started by launchd, cron or pm2 runs the `claude` binary directly, so it stays on whatever account it started with. Route it through hatswap instead:
+
+```sh
+hatswap exec claude -p "summarise today's issues"   # runs on the pin, then the default, at call time
+hatswap shim                                        # writes ~/.claude-accounts/bin/claude and codex
+```
+
+Point the bot at `~/.claude-accounts/bin/claude` (or put `~/.claude-accounts/bin` first on its `PATH`). Each call looks up the account again, so `hatswap default acme` applies to the bot's next call, with no restart. The lookup uses the bot's working folder, so a pinned folder still wins. To keep one bot on one account whatever the default is, set `HATSWAP_ACCOUNT=acme` in its environment (or use `exec --account acme`).
+
+`exec` ignores a `CLAUDE_CONFIG_DIR` the bot inherited, because following it would keep the bot on its old account. It clears `ANTHROPIC_API_KEY` and the other login variables for named accounts, quietly, and sets `CODEX_HOME` when the account has its own Codex login. A process that is already running keeps the account it started on: a bot that holds one Claude session open for hours picks up the new default only when it next starts `claude`. Keep the shim folder off your interactive `PATH`; the shell hook is the right tool there.
+
 **Work with saved briefs**
 
 ```sh
@@ -298,6 +312,8 @@ hatswap brief --edit                    # write, review and print a brief withou
 | `codex-login <name\|main>` | Sign an account in to its own Codex login. |
 | `codex <name\|main> [codex args…]` | Start Codex on that account's Codex login. |
 | `use <name> [--default] [claude args…]` | Start Claude Code on an account. `hatswap <name>` is equivalent. `--default` also makes it the default. |
+| `exec [--account <name\|main>] <command> [args…]` | Run a command (`claude`, `codex`, a bot) on the account a new session would get now: `--account`, then `HATSWAP_ACCOUNT`, then the folder pin, then the default. No terminal needed. |
+| `shim [--remove]` | Write (or remove) `claude` and `codex` wrappers in `~/.claude-accounts/bin` that run through `exec`. |
 | `main [claude args…]` | Start Claude Code on the main account (`~/.claude`). |
 | `switch <target> [id] [--default] [--yes]` | Continue a conversation on another account, restarting it in its own tab (tmux, Terminal.app, iTerm2) or resuming it here. |
 | `default [name\|main]` | Show or set the account plain `claude` starts on. |

@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-13
+
+### Added
+- `hatswap exec [--account <name|main>] <command> [args]` runs a command on the
+  account a new session would get at that moment (`--account`, then
+  `HATSWAP_ACCOUNT`, then the folder pin, then the default). Bots and scripts
+  that start `claude -p` per job now follow `hatswap default` without being
+  restarted; before, only `claude` typed in a terminal did, through the shell hook.
+- `hatswap shim` writes `claude` and `codex` wrappers to
+  `~/.claude-accounts/bin` that do the same, for bots that call a fixed path or
+  search `PATH`. `shim --remove` deletes them.
+- `HATSWAP_ACCOUNT=<name>` keeps one bot on one account.
+
+### Changed
+- `bin` is no longer accepted as an account name (the shims live there).
+
 ## [0.5.0] - 2026-10-12
 
 ### Changed
@@ -139,7 +155,8 @@ All notable changes to this project are documented here. The format follows
 - `/handoff` slash command via `install-command`; `save-brief`, `briefs`.
 - Secret redaction in condensed transcripts.
 
-[Unreleased]: https://github.com/orvi2014/hatswap/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/orvi2014/hatswap/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/orvi2014/hatswap/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/orvi2014/hatswap/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/orvi2014/hatswap/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/orvi2014/hatswap/compare/v0.4.0...v0.4.1

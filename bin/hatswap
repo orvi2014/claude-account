@@ -7,7 +7,7 @@
 # with ~/.claude by symlink; only the login and ~/.claude.json are per account.
 set -euo pipefail
 
-VERSION=0.5.0
+VERSION=0.6.0
 # hatswap was called claude-account until 0.5.0. The data folder keeps its
 # name because Claude Code keys each account's Keychain login to its path;
 # the old variable and pin-file names are still honoured.
@@ -62,6 +62,14 @@ Usage: hatswap <command> [name] [claude args...]
                       which one a new 'claude' starts on
   remove <name>       delete a profile and its saved login
   main [args]         start Claude with the main account (~/.claude)
+  exec [--account <name|main>] <command> [args]
+                      run a command (claude, codex, a bot) on the account a
+                      new session would get right now: pin, then default.
+                      For bots and scripts: each call looks the account up
+                      again, so a changed default applies without a restart
+  shim [--remove]     write claude and codex wrappers to $BASE/bin that
+                      do 'hatswap exec' for you; put that folder first on a
+                      bot's PATH, or point the bot at $BASE/bin/claude
   sessions [n]        recent conversations in this folder, and which are open
 
 Handoff (default session: the newest one in this folder)
@@ -96,7 +104,7 @@ DEFAULT_FILE="$BASE/.default"
 default_name() {
   local n=""
   [[ -r "$DEFAULT_FILE" ]] && n="$(tr -d '[:space:]' < "$DEFAULT_FILE")"
-  [[ -n "$n" && -d "$BASE/$n" ]] && echo "$n" || echo main
+  [[ -n "$n" && "$n" != bin && -d "$BASE/$n" ]] && echo "$n" || echo main
 }
 
 set_default() {
@@ -471,7 +479,10 @@ stop_session() {
   exit 1
 }
 
-valid() { [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Bad name: $1" >&2; exit 1; }; }
+valid() {
+  [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Bad name: $1" >&2; exit 1; }
+  [[ "$1" != bin ]] || { echo "'bin' holds hatswap's shims, not an account" >&2; exit 1; }
+}
 dir_of() { echo "$BASE/$1"; }
 
 email_of() {
@@ -630,6 +641,48 @@ account_env() {
   printf 'CLAUDE_CONFIG_DIR=%s\n' "$dir"
 }
 
+# exec_account: the account a bot's call runs on, looked up on every call.
+# HATSWAP_ACCOUNT fixes one; otherwise pin, then default. An inherited
+# CLAUDE_CONFIG_DIR is ignored: it is usually left over from whatever started
+# the bot, and following it would freeze the bot on that account.
+exec_account() {
+  local name="${1:-${HATSWAP_ACCOUNT:-}}"
+  [[ -n "$name" ]] || name="$(new_session_account | cut -f1)"
+  if [[ "$name" != main ]]; then
+    valid "$name"
+    [[ -d "$BASE/$name" ]] || { echo "hatswap: no account '$name'" >&2; exit 1; }
+  fi
+  echo "$name"
+}
+
+# path_without <dir>: $PATH minus that folder, so a shim does not find itself.
+path_without() {
+  local out="" p IFS=:
+  for p in $PATH; do [[ "$p" == "$1" || -z "$p" ]] || out="${out:+$out:}$p"; done
+  echo "$out"
+}
+
+SHIM_DIR="$BASE/bin"
+
+write_shims() {
+  local self t
+  self="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")"
+  mkdir -p "$SHIM_DIR"; chmod 700 "$BASE"
+  for t in claude codex; do
+    cat > "$SHIM_DIR/$t" <<EOF
+#!/bin/sh
+# hatswap shim: runs $t on the account a new session would get right now
+# (HATSWAP_ACCOUNT, then folder pin, then 'hatswap default').
+exec "$self" exec $t "\$@"
+EOF
+    chmod 755 "$SHIM_DIR/$t"
+  done
+  echo "Wrote $SHIM_DIR/claude and $SHIM_DIR/codex."
+  echo "Each call runs on the current pin or default; 'hatswap default <name>' applies to the next call, no restart."
+  echo "For a bot: call $SHIM_DIR/claude instead of claude, or put $SHIM_DIR first on its PATH."
+  echo "To keep one bot on one account: set HATSWAP_ACCOUNT=<name> in its environment."
+}
+
 need_tty() {
   [[ -t 0 && -t 1 ]] && return 0
   echo "This opens an interactive Claude session; run it in a normal terminal tab (not with ! inside Claude)." >&2
@@ -715,8 +768,11 @@ for f, home in uniq[:limit]:
 PY
 }
 
+# hatswap's own calls to claude/codex must reach the real ones, not the shims.
+PATH="$(path_without "$SHIM_DIR")"; export PATH
+
 cmd="${1:-}"; shift || true
-if [[ -n "$cmd" && "$cmd" =~ ^[A-Za-z0-9_-]+$ && -d "$BASE/$cmd" ]]; then
+if [[ -n "$cmd" && "$cmd" =~ ^[A-Za-z0-9_-]+$ && "$cmd" != bin && -d "$BASE/$cmd" ]]; then
   case "${1:-}" in
     list) cmd=list; shift ;;
     use|login|remove|switch|private|codex-login) next="$1"; shift; set -- "$cmd" "$@"; cmd="$next" ;;
@@ -1107,7 +1163,7 @@ pick_session() {
 case "$cmd" in
   add)
     name="${1:?name required}"; valid "$name"
-    case "$name" in main|hatswap|codex|codex-login|private|update|pin|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
+    case "$name" in main|hatswap|exec|shim|bin|codex|codex-login|private|update|pin|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
       echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
     dir="$(dir_of "$name")"
     [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
@@ -1407,6 +1463,7 @@ case "$cmd" in
     for d in "$BASE"/*/; do
       [[ -d "$d" ]] || continue
       n="$(basename "$d")"
+      [[ "$n" == bin ]] && continue
       printf "%-16s %s%s\n" "$n" "$(email_of "${d%/}")" "$(extras "$n" "${d%/}")"
     done
     ;;
@@ -1427,6 +1484,33 @@ case "$cmd" in
     ;;
   main)
     run "$MAIN" "$@"
+    ;;
+  exec)
+    acct=""
+    if [[ "${1:-}" == --account ]]; then acct="${2:?usage: hatswap exec --account <name|main> <command> [args]}"; shift 2; fi
+    [[ "${1:-}" == -- ]] && shift
+    [[ $# -gt 0 ]] || { echo "usage: hatswap exec [--account <name|main>] <command> [args]" >&2; exit 1; }
+    name="$(exec_account "$acct")"
+    dir="$(config_dir_of "$name")"
+    [[ "$dir" == "$MAIN" ]] || link_shared "$dir"
+    # Quiet: a bot would log the ignored-key notice on every call.
+    e=(); while IFS= read -r a; do e+=("$a"); done < <(account_env "$dir" 2>/dev/null)
+    if [[ "$dir" == "$MAIN" ]]; then
+      e+=(-u CODEX_HOME)
+    elif codex_signed_in "$dir"; then
+      link_codex_shared "$(codex_home_of "$dir")"
+      e+=("CODEX_HOME=$(codex_home_of "$dir")")
+    fi
+    [[ -n "${HATSWAP_VERBOSE:-}" ]] && echo "hatswap: running $1 on $name" >&2
+    exec env "${e[@]}" "$@"
+    ;;
+  shim)
+    if [[ "${1:-}" == --remove ]]; then
+      rm -f "$SHIM_DIR/claude" "$SHIM_DIR/codex"; rmdir "$SHIM_DIR" 2>/dev/null || true
+      echo "Removed the shims from $SHIM_DIR."
+    else
+      write_shims
+    fi
     ;;
   whoami|current)
     warn_stale_commands

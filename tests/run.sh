@@ -460,6 +460,31 @@ out="$(ANTHROPIC_API_KEY=sk-test HATSWAP_KEEP_AUTH_ENV=1 tty_run "$BIN" use work
 ok "HATSWAP_KEEP_AUTH_ENV=1 keeps the key" '[[ "$out" == *"AUTHKEY=sk-test"* ]]'
 ok "HATSWAP_DIR picks the data folder" '[[ "$(HATSWAP_DIR="$T/nowhere" "$BIN" list 2>/dev/null | wc -l | tr -d " ")" == 1 ]]'
 
+# exec and shims: bots follow the default on every call
+"$BIN" default main >/dev/null
+mkdir -p "$T/bot"
+ok "exec runs on main with no pin or default" '[[ "$(cd "$T/bot" && "$BIN" exec claude -p x </dev/null; cat "$FAKE_LOG.brief")" == *"CONFIG=<unset>"* ]]'
+"$BIN" default work >/dev/null 2>&1
+ok "exec follows a default set after the bot started" '[[ "$(cd "$T/bot" && "$BIN" exec claude hi)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=hi"* ]]'
+ok "exec ignores an inherited CLAUDE_CONFIG_DIR" '[[ "$(cd "$T/bot" && CLAUDE_CONFIG_DIR=/stale "$BIN" exec claude hi)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work "* ]]'
+ok "exec clears an API key for a named account" '[[ "$(cd "$T/bot" && ANTHROPIC_API_KEY=sk-x "$BIN" exec claude hi 2>&1)" == *"AUTHKEY=<unset>"* ]]'
+ok "HATSWAP_ACCOUNT fixes a bot to one account" '[[ "$(cd "$T/bot" && HATSWAP_ACCOUNT=main "$BIN" exec claude hi)" == *"CONFIG=<unset>"* ]]'
+ok "exec --account picks one" '[[ "$(cd "$T/bot" && "$BIN" exec --account main claude hi)" == *"CONFIG=<unset>"* ]]'
+ok "exec honours a folder pin" '[[ "$(cd "$T/oldpin" && "$BIN" exec claude hi)" == *"CONFIG=<unset>"* ]]'
+ok "exec refuses an unknown account" '! HATSWAP_ACCOUNT=nope "$BIN" exec claude hi >/dev/null 2>&1'
+ok "exec runs without a terminal" '[[ "$(cd "$T/bot" && "$BIN" exec claude hi </dev/null | cat)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work "* ]]'
+out="$("$BIN" shim)"
+ok "shim writes claude and codex wrappers" '[[ -x "$CLAUDE_ACCOUNTS_DIR/bin/claude" && -x "$CLAUDE_ACCOUNTS_DIR/bin/codex" && "$out" == *"no restart"* ]]'
+ok "the claude shim follows the default and finds the real claude" '[[ "$(cd "$T/bot" && PATH="$CLAUDE_ACCOUNTS_DIR/bin:$PATH" claude hi)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work ARGS=hi"* ]]'
+"$BIN" default main >/dev/null
+ok "the shim picks up a changed default on the next call" '[[ "$(cd "$T/bot" && "$CLAUDE_ACCOUNTS_DIR/bin/claude" hi)" == *"CONFIG=<unset>"* ]]'
+ok "the codex shim runs codex" '[[ "$(cd "$T/bot" && "$CLAUDE_ACCOUNTS_DIR/bin/codex" go)" == *"CODEX ARGS=go"* ]]'
+ok "hatswap use is not hijacked by a shim on PATH" '[[ "$(PATH="$CLAUDE_ACCOUNTS_DIR/bin:$PATH" tty_run "$BIN" use work)" == *"CONFIG=$CLAUDE_ACCOUNTS_DIR/work"* ]]'
+ok "list does not show the shim folder" '! "$BIN" list | grep -q "^bin "'
+ok "bin is not a valid account name" '! "$BIN" add bin >/dev/null 2>&1 && ! "$BIN" default bin >/dev/null 2>&1'
+"$BIN" shim --remove >/dev/null
+ok "shim --remove deletes them" '[[ ! -e "$CLAUDE_ACCOUNTS_DIR/bin" ]]'
+
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'
 echo y | "$BIN" remove work >/dev/null 2>&1
