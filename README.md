@@ -160,6 +160,13 @@ hatswap install-command
 
 This adds `~/.claude/commands/handoff.md` and `switch.md`, which every account shares. In any Claude Code session you can then run `/switch work`, `/handoff work`, `/handoff codex` or `/handoff`.
 
+The same commands also come as a Claude Code plugin, which adds `/hatswap:accounts` (every account's usage) as well. It still needs the CLI installed:
+
+```
+/plugin marketplace add orvi2014/hatswap
+/plugin install hatswap@hatswap
+```
+
 ### Upgrading from claude-account
 
 > **Formerly `claude-account`.** Renamed in 0.5.0 to avoid confusion with an unrelated project of the same name. Old links redirect here, and the `claude-account` command keeps working as an alias.

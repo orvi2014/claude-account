@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- A Claude Code plugin, from this repository's own marketplace:
+  `/plugin marketplace add orvi2014/hatswap`, then
+  `/plugin install hatswap@hatswap`. It gives `/hatswap:switch`,
+  `/hatswap:handoff` and `/hatswap:accounts`, and needs the CLI installed.
+
 ## [0.7.0] - 2026-10-13
 
 ### Added

@@ -1,0 +1,13 @@
+{
+  "name": "hatswap",
+  "description": "Slash commands for hatswap: continue a conversation on another Claude account, hand a session off with a brief, and see each account's usage. Needs the hatswap CLI.",
+  "version": "0.7.0",
+  "author": {
+    "name": "orvi2014",
+    "url": "https://github.com/orvi2014"
+  },
+  "homepage": "https://github.com/orvi2014/hatswap",
+  "repository": "https://github.com/orvi2014/hatswap",
+  "license": "MIT",
+  "keywords": ["accounts", "multi-account", "handoff", "codex", "clients"]
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "hatswap",
+  "description": "hatswap: every client's Claude Code account signed in at once",
+  "owner": {
+    "name": "orvi2014",
+    "url": "https://github.com/orvi2014"
+  },
+  "plugins": [
+    {
+      "name": "hatswap",
+      "description": "Slash commands for hatswap: continue a conversation on another Claude account, hand a session off with a brief, and see each account's usage.",
+      "source": "./plugin",
+      "category": "productivity",
+      "homepage": "https://github.com/orvi2014/hatswap"
+    }
+  ]
+}

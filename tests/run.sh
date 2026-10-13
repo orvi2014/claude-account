@@ -588,6 +588,12 @@ out="$(cd "$T/pk" && HATSWAP_PICK_KEYS="\\x1b[B\\r" "$BIN" 2>&1 </dev/null)"
 ok "picker enter starts claude on the selected account" '[[ "$out" == *"interactive Claude session"* ]]'
 ok "no command without a terminal still prints help" '[[ "$("$BIN" </dev/null | head -1)" == Usage:* ]]'
 
+# plugin
+R="$(cd "$(dirname "$BIN")/.." && pwd)"
+ok "plugin manifests are valid JSON" 'python3 -c "import json,sys; [json.load(open(f)) for f in sys.argv[1:]]" "$R/.claude-plugin/marketplace.json" "$R/plugin/.claude-plugin/plugin.json"'
+ok "plugin version matches hatswap" '[[ "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"version\"])" "$R/plugin/.claude-plugin/plugin.json")" == "$("$BIN" --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")" ]]'
+ok "plugin /handoff matches the installed /handoff" 'diff <(sed "/hatswap-commands:/d" "$HOME/.claude/commands/handoff.md") <(grep -v "^If \`command -v hatswap\`" "$R/plugin/commands/handoff.md" | cat -s) >/dev/null'
+
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'
 echo y | "$BIN" remove work >/dev/null 2>&1
