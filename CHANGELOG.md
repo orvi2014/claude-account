@@ -19,6 +19,10 @@ All notable changes to this project are documented here. The format follows
   browser icons and a 1280×640 social card.
 
 ### Fixed
+- Sessions that an app reopens after a restart (with `zsh -l -c claude …`)
+  started on main, because that shell never reads `~/.zshrc`. The zsh hook now
+  goes in `~/.zshenv`, which every zsh reads; run `hatswap setup-shell` once to
+  move an existing hook there.
 - `switch` and `handoff` with a session ID now work after Claude's shell has
   moved to another folder (a subfolder or a worktree): hatswap finds the folder
   the session was started in and resumes it from there.

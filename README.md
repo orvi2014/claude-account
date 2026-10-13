@@ -230,7 +230,7 @@ hatswap default main         # back to ~/.claude
 hatswap default              # show the current default
 ```
 
-The first time you set a default, `hatswap` offers to add a one-line hook to your shell's startup file (`~/.zshrc`, `~/.bash_profile` / `~/.bashrc`, or fish `conf.d`) so plain `claude` follows it. The hook reads the default on every call, so changing it later needs no reload. An explicit `CLAUDE_CONFIG_DIR` always wins.
+The first time you set a default, `hatswap` offers to add a one-line hook to your shell's startup file (`~/.zshenv`, `~/.bash_profile` / `~/.bashrc`, or fish `conf.d`) so plain `claude` follows it. For zsh it goes in `~/.zshenv` rather than `~/.zshrc` so that sessions an app reopens after a restart (with `zsh -l -c claude …`) also get it; `setup-shell` moves an older hook out of `~/.zshrc`. The hook reads the default on every call, so changing it later needs no reload. An explicit `CLAUDE_CONFIG_DIR` always wins.
 
 **Pin a folder to an account**
 

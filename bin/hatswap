@@ -182,7 +182,9 @@ user_shell() {
 # Startup file the hook goes in for a shell.
 rc_file() {
   case "$1" in
-    zsh) echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    # .zshenv, not .zshrc: apps that reopen sessions after a restart run
+    # 'zsh -l -c claude ...', which never reads .zshrc.
+    zsh) echo "${ZDOTDIR:-$HOME}/.zshenv" ;;
     bash) [[ "$(uname)" == Darwin ]] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc" ;;
     fish) echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/hatswap.fish" ;;
   esac
@@ -194,31 +196,43 @@ HOOK_END="# <<< hatswap <<<"
 OLD_HOOK_BEGIN="# >>> claude-account >>>"
 OLD_HOOK_END="# <<< claude-account <<<"
 
-# Startup files that may hold a hook: the current one, plus the pre-rename
-# fish file.
+# Startup files that may hold a hook: the current one, plus older places
+# (the pre-rename fish file; .zshrc for zsh before 0.7).
 hook_files() {
   rc_file "$1"
   [[ "$1" == fish ]] && echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/claude-account.fish"
+  [[ "$1" == zsh ]] && echo "${ZDOTDIR:-$HOME}/.zshrc"
   return 0
 }
 
+has_hook() { [[ -f "$1" ]] && grep -qF -e "$HOOK_BEGIN" -e "$OLD_HOOK_BEGIN" "$1"; }
+
+# A zsh hook left in .zshrc does not count: restored sessions miss it.
 hook_installed() {
   local f
   while IFS= read -r f; do
-    [[ -f "$f" ]] && grep -qF -e "$HOOK_BEGIN" -e "$OLD_HOOK_BEGIN" "$f" && return 0
+    [[ "$1" == zsh && "$f" != "$(rc_file zsh)" ]] && continue
+    has_hook "$f" && return 0
   done < <(hook_files "$1")
   return 1
 }
 
 install_hook() {
-  local sh="$1" f; f="$(rc_file "$sh")"
+  local sh="$1" f self; f="$(rc_file "$sh")"
   if hook_installed "$sh"; then echo "Shell hook already in ${f/#$HOME/~}"; return 0; fi
+  # Move a zsh hook out of .zshrc.
+  [[ "$sh" == zsh ]] && has_hook "${ZDOTDIR:-$HOME}/.zshrc" && remove_hook zsh >/dev/null
   mkdir -p "$(dirname "$f")"
   {
     [[ -s "$f" ]] && echo
     echo "$HOOK_BEGIN"
     if [[ "$sh" == fish ]]; then
       echo "command -q hatswap; and hatswap shell-init fish | source"
+    elif [[ "$sh" == zsh ]]; then
+      # .zshenv runs before PATH is set up, so call hatswap by its path.
+      self="$(command -v hatswap 2>/dev/null || true)"
+      [[ "$self" == /* ]] || self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+      echo "[ -x \"$self\" ] && eval \"\$(\"$self\" shell-init zsh)\""
     else
       echo "command -v hatswap >/dev/null 2>&1 && eval \"\$(hatswap shell-init $sh)\""
     fi
@@ -228,10 +242,11 @@ install_hook() {
 }
 
 remove_hook() {
-  local sh="$1" f tmp
-  hook_installed "$sh" || { echo "No shell hook in $(rc_file "$sh" | sed "s|^$HOME|~|")"; return 0; }
+  local sh="$1" f tmp any=0
+  while IFS= read -r f; do has_hook "$f" && any=1; done < <(hook_files "$sh")
+  [[ "$any" == 1 ]] || { echo "No shell hook in $(rc_file "$sh" | sed "s|^$HOME|~|")"; return 0; }
   while IFS= read -r f; do
-    [[ -f "$f" ]] && grep -qF -e "$HOOK_BEGIN" -e "$OLD_HOOK_BEGIN" "$f" || continue
+    has_hook "$f" || continue
     tmp="$(mktemp)"
     awk -v b="$HOOK_BEGIN" -v e="$HOOK_END" -v ob="$OLD_HOOK_BEGIN" -v oe="$OLD_HOOK_END" \
       '$0==b||$0==ob{skip=1; next} $0==e||$0==oe{skip=0; next} !skip' "$f" > "$tmp"
