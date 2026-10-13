@@ -461,6 +461,11 @@ printf 'keep\n# >>> hatswap >>>\ncommand -v hatswap >/dev/null 2>&1 && eval "$(h
 ok "a zsh hook in .zshrc does not count as installed" '[[ "$(SHELL=/bin/zsh "$BIN" setup-shell --shell zsh)" != *"already"* ]]'
 ok "setup-shell moves a zsh hook from .zshrc to .zshenv" '! grep -q hatswap "$HOME/.zshrc" && grep -q keep "$HOME/.zshrc" && grep -q ">>> hatswap >>>" "$HOME/.zshenv"'
 "$BIN" setup-shell --shell zsh --remove >/dev/null
+printf 'keep\n# >>> hatswap >>>\ncommand -v hatswap >/dev/null 2>&1 && eval "$(hatswap shell-init zsh)"\n# <<< hatswap <<<\n' > "$HOME/.zshrc"
+out="$("$BIN" shell-init zsh 2>&1)"
+ok "the old .zshrc hook moves itself to .zshenv on its next run" '! grep -q hatswap "$HOME/.zshrc" && grep -q ">>> hatswap >>>" "$HOME/.zshenv" && [[ "$out" == *"moved the shell hook"*"claude()"* ]]'
+ok "shell-init does not move anything a second time" '[[ "$("$BIN" shell-init zsh 2>&1)" != *"moved"* ]]'
+"$BIN" setup-shell --shell zsh --remove >/dev/null
 out="$(ANTHROPIC_API_KEY=sk-test HATSWAP_KEEP_AUTH_ENV=1 tty_run "$BIN" use work)"
 ok "HATSWAP_KEEP_AUTH_ENV=1 keeps the key" '[[ "$out" == *"AUTHKEY=sk-test"* ]]'
 ok "HATSWAP_DIR picks the data folder" '[[ "$(HATSWAP_DIR="$T/nowhere" "$BIN" list 2>/dev/null | wc -l | tr -d " ")" == 1 ]]'

@@ -256,6 +256,14 @@ remove_hook() {
   done < <(hook_files "$sh")
 }
 
+# A zsh hook from before 0.7 sits in .zshrc; move it to .zshenv. Runs from
+# 'update' and from the old hook itself (shell-init), so nobody has to.
+migrate_zsh_hook() {
+  has_hook "${ZDOTDIR:-$HOME}/.zshrc" && ! hook_installed zsh || return 0
+  install_hook zsh >/dev/null
+  echo "hatswap: moved the shell hook from ~/.zshrc to ~/.zshenv, so sessions reopened after a restart also follow the default" >&2
+}
+
 # After setting a default: offer to install the hook if it is missing.
 ensure_hook() {
   local sh; sh="$(user_shell 2>/dev/null)" || { echo "Plain 'claude' follows the default only with the shell hook; see: hatswap shell-init" >&2; return 0; }
@@ -1873,6 +1881,7 @@ case "$cmd" in
     fi
     ;;
   shell-init)
+    [[ "${1:-}" == zsh ]] && migrate_zsh_hook
     shell_init "${1:-}"
     ;;
   setup-shell)
@@ -1938,7 +1947,9 @@ case "$cmd" in
     if [[ -f "$MAIN/commands/handoff.md" || -f "$MAIN/commands/switch.md" ]]; then
       "$self" install-command
     fi
+    "$self" __migrate-hook
     ;;
+  __migrate-hook) migrate_zsh_hook ;;
   login)
     name="${1:?name required}"; valid "$name"
     dir="$(dir_of "$name")"
