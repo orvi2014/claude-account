@@ -555,6 +555,13 @@ out="$(CLAUDECODE=1 "$BIN" use work --default </dev/null 2>&1)"
 ok "use --default inside Claude sets the default and points to switch" '[[ "$out" == *"hatswap switch work"* && "$("$BIN" default)" == work ]]'
 "$BIN" default main >/dev/null
 
+# a session whose shell moved into a subfolder (or a worktree) still switches
+echo '{"type":"user","uuid":"w1","parentUuid":null,"cwd":"'"$T/work"'","message":{"content":"wandered task"}}' > "$PROJ/44444444-4444-4444-4444-444444444444.jsonl"
+mkdir -p "$T/elsewhere/wt"
+out="$(cd "$T/elsewhere/wt" && tty_run "$BIN" switch work 44444444-4444-4444-4444-444444444444)"
+ok "switch from another folder finds the session's own folder" '[[ "$out" == *"working from there"* && "$out" == *"ARGS=--resume 44444444"* ]]'
+rm -f "$PROJ/44444444-4444-4444-4444-444444444444.jsonl"
+
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'
 echo y | "$BIN" remove work >/dev/null 2>&1

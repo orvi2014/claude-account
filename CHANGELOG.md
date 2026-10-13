@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- `switch` and `handoff` with a session ID now work after Claude's shell has
+  moved to another folder (a subfolder or a worktree): hatswap finds the folder
+  the session was started in and resumes it from there.
 - `use <name> --default` typed with `!` inside Claude now saves the default and
   tells you to run `switch`, instead of refusing without doing anything.
 

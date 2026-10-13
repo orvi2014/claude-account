@@ -1386,6 +1386,37 @@ seed_prompt() {
   printf 'You are taking over a coding task from another agent session. Their handoff brief is below. Read it, check the current state of the repo before trusting it (git status, the files and PRs it names), then continue from "Next step". Confirm with the user before anything destructive or outward-facing.\n\n%s\n' "$(cat "$1")"
 }
 
+# session_home <session-id>: the folder a session was started in, from the
+# live-session registry or its transcript. Claude's own shell can wander off
+# (cd into a worktree), but --resume only finds a session from that folder.
+session_home() {
+  python3 - "$MAIN" "$BASE" "$1" <<'PY'
+import glob, json, os, sys
+main, base, sid = sys.argv[1:4]
+dirs = [main] + [d for d in glob.glob(os.path.join(base, "*")) if os.path.isdir(d)]
+for cfg in dirs:
+    for f in glob.glob(os.path.join(cfg, "sessions", "*.json")):
+        try:
+            s = json.load(open(f))
+        except Exception:
+            continue
+        if s.get("sessionId") == sid and s.get("cwd"):
+            print(s["cwd"]); sys.exit(0)
+for cfg in dirs:
+    for f in glob.glob(os.path.join(cfg, "projects", "*", sid + ".jsonl")):
+        try:
+            with open(f) as fh:
+                for i, line in enumerate(fh):
+                    if i > 50:
+                        break
+                    cwd = json.loads(line).get("cwd") if '"cwd"' in line else None
+                    if cwd:
+                        print(cwd); sys.exit(0)
+        except Exception:
+            pass
+PY
+}
+
 pick_session() {
   local sid="$1" row
   if [[ -z "$sid" ]]; then
@@ -1511,6 +1542,13 @@ case "$cmd" in
       [[ "$edit" == 1 ]] && edit_brief "$from"
       echo "Starting $( [[ "$dir" == codex ]] && echo codex || account_label "$dir" ) from $from"
       start_from_brief "$dir" "$from"
+    fi
+    if [[ -n "$sid" ]] && ! session_table 200 | awk -F'\t' -v s="$sid" '$3==s {f=1} END {exit !f}'; then
+      home="$(session_home "$sid")"
+      if [[ -n "$home" && -d "$home" && "$home" != "$PWD" ]]; then
+        echo "Session $sid was started in ${home/#$HOME/~}; working from there."
+        cd "$home"
+      fi
     fi
     row="$(pick_session "$sid")" || exit 1
     sid="$(cut -f3 <<<"$row")"; state="$(cut -f1 <<<"$row")"; owner="$(cut -f2 <<<"$row")"; title="$(cut -f5 <<<"$row")"
