@@ -12,6 +12,18 @@ echo '{}' > "$S/home/.claude/settings.json"
 echo '{"oauthAccount":{"emailAddress":"personal@example.com"}}' > "$S/home/.claude.json"
 mkdir -p "$S/home/.claude-accounts/work"
 echo '{"oauthAccount":{"emailAddress":"work@example.com"}}' > "$S/home/.claude-accounts/work/.claude.json"
+mkdir -p "$S/home/.claude-accounts/acme"
+echo '{"oauthAccount":{"emailAddress":"you@acme.example"}}' > "$S/home/.claude-accounts/acme/.claude.json"
+# Example usage for the picker. The sandbox has no logins, so seed the cache
+# hatswap reads from (valid for an hour, long enough to record).
+python3 - "$S/home" <<'PY'
+import json, sys, time, datetime
+h = sys.argv[1]; now = datetime.datetime.now(datetime.timezone.utc)
+def w(u, hrs): return {"utilization": u, "resets_at": (now + datetime.timedelta(hours=hrs)).isoformat()}
+use = {f"{h}/.claude": (0, 100), f"{h}/.claude-accounts/work": (10, 27), f"{h}/.claude-accounts/acme": (64, 41)}
+json.dump({k: {"at": time.time() + 3600, "data": {"five_hour": w(a, 3), "seven_day": w(b, 70)}} for k, (a, b) in use.items()},
+          open(f"{h}/.claude-accounts/.usage-cache.json", "w"))
+PY
 mkdir -p "$S/home/.claude-accounts/work/codex"
 python3 - "$S/home/.claude-accounts/work/codex/auth.json" <<'PY'
 import base64, json, sys
