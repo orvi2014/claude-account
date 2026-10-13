@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-13
+
 ### Added
 - `hatswap` on its own opens an account picker: every account with its email,
   5-hour and weekly use, default and pin. ↑↓ choose, ⏎ start Claude, `d` set
@@ -17,6 +19,8 @@ All notable changes to this project are documented here. The format follows
 - A logo: two top hats turned around the same centre. The README has a header
   for light and dark mode; `docs/brand/` holds the marks, lockups, app and
   browser icons and a 1280×640 social card.
+- The demo GIF is re-recorded with the picker: default and pin from the
+  picker, then `switch` and the Codex handoff.
 
 ### Fixed
 - Sessions that an app reopens after a restart (with `zsh -l -c claude …`)
@@ -189,7 +193,8 @@ All notable changes to this project are documented here. The format follows
 - `/handoff` slash command via `install-command`; `save-brief`, `briefs`.
 - Secret redaction in condensed transcripts.
 
-[Unreleased]: https://github.com/orvi2014/hatswap/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/orvi2014/hatswap/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/orvi2014/hatswap/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/orvi2014/hatswap/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/orvi2014/hatswap/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/orvi2014/hatswap/compare/v0.4.1...v0.4.2
