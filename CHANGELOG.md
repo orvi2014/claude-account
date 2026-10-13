@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `use <name> --default` typed with `!` inside Claude now saves the default and
+  tells you to run `switch`, instead of refusing without doing anything.
+
 ## [0.6.0] - 2026-10-13
 
 ### Added

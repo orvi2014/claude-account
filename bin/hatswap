@@ -1569,11 +1569,19 @@ case "$cmd" in
     name="${1:?name required}"; shift
     [[ "$name" == main ]] && dir="$MAIN" || { valid "$name"; dir="$(dir_of "$name")"; }
     [[ -d "$dir" ]] || { echo "No profile $name. Run: hatswap add $name" >&2; exit 1; }
-    args=()
+    args=(); make_default=0
     for a in "$@"; do
-      [[ "$a" == --default ]] && { need_tty; set_default "$name"; continue; }
+      [[ "$a" == --default ]] && { make_default=1; continue; }
       args+=("$a")
     done
+    if [[ ! ( -t 0 && -t 1 ) && -n "${CLAUDECODE:-}" ]]; then
+      # Typed with ! inside Claude: 'use' would start a second Claude here.
+      [[ "$make_default" == 1 ]] && set_default "$name"
+      echo "'use' starts a new Claude, which can't run inside this one. To move this conversation to '$name':" >&2
+      echo "  ! hatswap switch $name$( [[ "$make_default" == 1 ]] || echo " [--default]")" >&2
+      exit 1
+    fi
+    [[ "$make_default" == 1 ]] && { need_tty; set_default "$name"; }
     run "$dir" ${args[@]+"${args[@]}"}
     ;;
   pin)

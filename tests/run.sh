@@ -551,6 +551,10 @@ if [[ "$(uname)" == Darwin ]]; then
   rm -f "$T/fake/open"
 fi
 
+out="$(CLAUDECODE=1 "$BIN" use work --default </dev/null 2>&1)"
+ok "use --default inside Claude sets the default and points to switch" '[[ "$out" == *"hatswap switch work"* && "$("$BIN" default)" == work ]]'
+"$BIN" default main >/dev/null
+
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'
 echo y | "$BIN" remove work >/dev/null 2>&1
