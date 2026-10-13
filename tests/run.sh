@@ -485,6 +485,72 @@ ok "bin is not a valid account name" '! "$BIN" add bin >/dev/null 2>&1 && ! "$BI
 "$BIN" shim --remove >/dev/null
 ok "shim --remove deletes them" '[[ ! -e "$CLAUDE_ACCOUNTS_DIR/bin" ]]'
 
+# shared rules, keybindings and output styles
+mkdir -p "$HOME/.claude/rules" "$HOME/.claude/output-styles"; echo '{}' > "$HOME/.claude/keybindings.json"
+tty_run "$BIN" use work >/dev/null 2>&1
+ok "rules, output-styles and keybindings are shared" '[[ -L "$CLAUDE_ACCOUNTS_DIR/work/rules" && -L "$CLAUDE_ACCOUNTS_DIR/work/output-styles" && -L "$CLAUDE_ACCOUNTS_DIR/work/keybindings.json" ]]'
+
+# usage: limits per account from the /usage endpoint (faked with a file)
+work_svc="Claude Code-credentials-$(printf '%s' "$CLAUDE_ACCOUNTS_DIR/work" | shasum -a 256 | cut -c1-8)"
+cat > "$T/fake/security" <<F
+#!/bin/sh
+case "\$*" in
+  *"$work_svc"*) echo '{"claudeAiOauth":{"accessToken":"sk-ant-oat-SECRET","expiresAt":9999999999999}}' ;;
+  *"-s Claude Code-credentials -a"*) echo '{"claudeAiOauth":{"accessToken":"sk-ant-oat-MAIN","expiresAt":1000}}' ;;
+  *) exit 44 ;;
+esac
+F
+chmod +x "$T/fake/security"
+echo '{"five_hour":{"utilization":12.0,"resets_at":"2099-01-01T00:00:00+00:00"},"seven_day":{"utilization":40.4,"resets_at":"2099-01-05T00:00:00+00:00"}}' > "$T/usage.json"
+export HATSWAP_FAKE_KEYCHAIN=1 HATSWAP_USAGE_URL="file://$T/usage.json"
+out="$("$BIN" usage 2>&1)"
+ok "usage shows each account's 5-hour and weekly use" '[[ "$out" == *"work"*"12%"*"40%"* ]]'
+ok "usage says when a login token has expired" '[[ "$out" == *"main"*"expired"* ]]'
+ok "usage never prints a token" '[[ "$out" != *SECRET* && "$out" != *sk-ant* ]]'
+ok "usage --json for one account" '"$BIN" usage work --json | python3 -c "import json,sys;d=json.load(sys.stdin);assert d[0][\"account\"]==\"work\" and d[0][\"usage\"][\"five_hour\"][\"utilization\"]==12.0"'
+echo '{"five_hour":{"utilization":99}}' > "$T/usage.json"
+ok "usage is cached for a few minutes" '[[ "$("$BIN" usage work)" == *"12%"* ]]'
+ok "the usage cache holds no tokens" '! grep -q sk-ant "$CLAUDE_ACCOUNTS_DIR/.usage-cache.json" && [[ "$(stat -f %Lp "$CLAUDE_ACCOUNTS_DIR/.usage-cache.json" 2>/dev/null || stat -c %a "$CLAUDE_ACCOUNTS_DIR/.usage-cache.json")" == 600 ]]'
+ok "usage refuses an unknown account" '! "$BIN" usage nope >/dev/null 2>&1'
+unset HATSWAP_FAKE_KEYCHAIN HATSWAP_USAGE_URL; rm -f "$T/fake/security"
+
+# status line
+python3 -c "import json;p='$HOME/.claude/settings.json';d=json.load(open(p));d['statusLine']={'type':'command','command':'echo theirs','padding':1};json.dump(d,open(p,'w'))"
+out="$("$BIN" statusline --install)"
+ok "statusline --install keeps an existing status line" '[[ "$out" == *"Keeping your status line"* ]] && python3 -c "import json;d=json.load(open(\"$HOME/.claude/settings.json\"));assert d[\"statusLine\"][\"command\"].endswith(\"hatswap statusline\") and d[\"statusLine\"][\"padding\"]==1"'
+ok "statusline --install twice is a no-op" '[[ "$("$BIN" statusline --install)" == *"already"* ]]'
+out="$(echo '{}' | CLAUDE_CONFIG_DIR="$CLAUDE_ACCOUNTS_DIR/work" "$BIN" statusline)"
+ok "the status line shows the account, then the old line" '[[ "$out" == *"work"*"theirs"* ]]'
+ok "the status line shows main and its email" '[[ "$(echo "{}" | "$BIN" statusline)" == *"main · me@example.com"* ]]'
+"$BIN" statusline --remove >/dev/null
+ok "statusline --remove restores the old one" 'python3 -c "import json;d=json.load(open(\"$HOME/.claude/settings.json\"));assert d[\"statusLine\"][\"command\"]==\"echo theirs\""'
+
+# VS Code / Cursor extension
+mkdir -p "$T/vs/.vscode"; git -C "$T/vs" init -q
+echo '{"editor.tabSize":2,"claudeCode.environmentVariables":[{"name":"FOO","value":"1"}]}' > "$T/vs/.vscode/settings.json"
+out="$(cd "$T/vs" && "$BIN" vscode work)"
+ok "vscode points the extension at the account, keeping other settings" 'python3 -c "import json;d=json.load(open(\"$T/vs/.vscode/settings.json\"));e=d[\"claudeCode.environmentVariables\"];assert d[\"editor.tabSize\"]==2 and {\"name\":\"FOO\",\"value\":\"1\"} in e and {\"name\":\"CLAUDE_CONFIG_DIR\",\"value\":\"$CLAUDE_ACCOUNTS_DIR/work\"} in e"'
+ok "vscode keeps the settings file out of git" 'grep -q ".vscode/settings.json" "$T/vs/.git/info/exclude"'
+(cd "$T/vs" && "$BIN" vscode main >/dev/null)
+ok "vscode main leaves CLAUDE_CONFIG_DIR unset" '! grep -q CLAUDE_CONFIG_DIR "$T/vs/.vscode/settings.json" && grep -q FOO "$T/vs/.vscode/settings.json"'
+mkdir -p "$T/vs2/sub"; echo work > "$T/vs2/.hatswap"
+(cd "$T/vs2/sub" && "$BIN" vscode >/dev/null)
+ok "vscode with no name follows the folder pin" 'grep -q "$CLAUDE_ACCOUNTS_DIR/work" "$T/vs2/sub/.vscode/settings.json"'
+(cd "$T/vs2/sub" && "$BIN" vscode --clear >/dev/null)
+ok "vscode --clear removes it" '! grep -q CLAUDE_CONFIG_DIR "$T/vs2/sub/.vscode/settings.json"'
+printf '{\n  // a comment\n  "a": 1\n}\n' > "$T/vs/.vscode/settings.json"
+ok "vscode leaves a settings file with comments alone" '! (cd "$T/vs" && "$BIN" vscode work >/dev/null 2>&1) && grep -q "a comment" "$T/vs/.vscode/settings.json"'
+
+# Claude Desktop
+if [[ "$(uname)" == Darwin ]]; then
+  printf '#!/bin/sh\necho "OPEN $*" >> "%s"\n' "$T/open.log" > "$T/fake/open"; chmod +x "$T/fake/open"
+  out="$("$BIN" desktop work)"
+  ok "desktop opens a separate Claude for the account" 'grep -q -- "-n -a Claude --args --user-data-dir=$CLAUDE_ACCOUNTS_DIR/work/desktop" "$T/open.log" && [[ "$out" == *"First time"* && -d "$CLAUDE_ACCOUNTS_DIR/work/desktop" ]]'
+  "$BIN" desktop main >/dev/null
+  ok "desktop main opens the normal app" '[[ "$(tail -1 "$T/open.log")" == "OPEN -a Claude" ]]'
+  rm -f "$T/fake/open"
+fi
+
 # remove
 ok "remove refuses main" '! "$BIN" remove main >/dev/null 2>&1'
 echo y | "$BIN" remove work >/dev/null 2>&1

@@ -40,10 +40,13 @@ Multiple Claude Code accounts on one machine, with session handoff between them.
 ## Features
 
 - **Concurrent accounts.** Every account stays signed in; run two accounts in two terminals at once.
-- **Shared environment.** Settings, agents, skills, plugins, hooks, memory and conversation history are shared across accounts. Only the login differs.
+- **Shared environment.** Settings, agents, skills, plugins, hooks, rules, output styles, keybindings, memory and conversation history are shared across accounts. Only the login differs.
 - **Switch in place.** `switch` moves the current conversation to another account. In tmux (including desktop apps that host tabs in tmux), Terminal.app and iTerm2, the same tab restarts on the new login with its history intact.
 - **Default account.** `default` (or `--default`) picks the account plain `claude` starts on; `setup-shell` installs the one-line hook for zsh, bash or fish.
 - **Per-folder accounts.** `pin acme` in a client's folder and every `claude` started there uses that client's account.
+- **Usage per account.** `usage` shows every account's 5-hour and weekly limits in one table, the numbers `/usage` shows inside Claude.
+- **Account in the status line.** `statusline --install` puts the account and email at the bottom of every session, ahead of any status line you already have.
+- **VS Code, Cursor and Claude Desktop.** `vscode acme` makes the Claude extension use acme's login in that folder; `desktop acme` opens Claude Desktop signed in as acme, in its own window.
 - **Bots follow the default.** `exec` (or the `claude`/`codex` shims from `shim`) looks the account up on every call, so a long-running bot that starts `claude -p` per job moves to a new default without a restart.
 - **Codex per account.** Each account can have its own Codex login; `handoff codex` uses the one that belongs to the session's account.
 - **Private history.** Accounts can keep their conversations and memory to themselves, for client work that must stay separate.
@@ -282,6 +285,44 @@ hatswap private acme --off    # share history again (only while its own history 
 
 By default every account shares conversation history. A private account keeps its conversations and memory in its own `projects/` folder, so other accounts never read them; settings, skills and MCP servers are still shared. `sessions`, `brief` and `handoff` see private conversations too. When you deliberately hand one to another account, it is copied into that account's history and the command says so.
 
+**See every account's limits**
+
+```sh
+hatswap usage            # all accounts
+hatswap usage acme       # one; --json for scripts
+```
+
+```
+ACCOUNT        EMAIL                          5-HOUR  RESETS      WEEK  RESETS
+main           you@personal.com                   0%              100%  Fri 14:00
+acme           you@acme.com                       5%  in 0h44m     23%  Sat 16:00
+```
+
+The numbers come from the same endpoint Claude's `/usage` reads. It is not a public API, so it may change; results are cached for 3 minutes because it is rate-limited. hatswap reads each login from the Keychain (or `.credentials.json` on Linux) only to make that request: tokens are never printed, written or refreshed. An expired one says so; starting Claude on that account refreshes it. hatswap never switches accounts for you.
+
+**Show the account in Claude's status line**
+
+```sh
+hatswap statusline --install   # ⎈ acme · you@acme.com  │ <your existing status line>
+hatswap statusline --remove    # put back what you had
+```
+
+All accounts share `settings.json`, so one install covers every account. A status line you already had keeps running, after the account.
+
+**Use an account in VS Code, Cursor or Claude Desktop**
+
+```sh
+cd ~/clients/acme
+hatswap vscode acme        # the Claude extension uses acme in this folder
+hatswap vscode             # same, using this folder's pin or the default
+hatswap vscode --clear
+hatswap desktop acme       # Claude Desktop as acme, in its own window
+```
+
+`vscode` sets `CLAUDE_CONFIG_DIR` in the folder's `.vscode/settings.json` (`claudeCode.environmentVariables`), keeping your other settings, and adds the file to the repository's local ignore. Reload the window afterwards and open that folder itself, not a parent. For `main` it removes the entry, because Claude finds main's login only when the variable is unset. A `settings.json` with comments is left alone and the line to add is printed. The extension's own session list may still show `~/.claude` conversations ([anthropics/claude-code#30538](https://github.com/anthropics/claude-code/issues/30538)).
+
+`desktop` starts a separate Claude Desktop with its own profile folder (`~/.claude-accounts/<name>/desktop`), so each account has its own window and login. Sign in once; it stays signed in. `desktop main` opens the app as usual.
+
 **Run bots and scripts on the current default**
 
 The shell hook only covers `claude` typed in a terminal. A bot started by launchd, cron or pm2 runs the `claude` binary directly, so it stays on whatever account it started with. Route it through hatswap instead:
@@ -313,6 +354,10 @@ hatswap brief --edit                    # write, review and print a brief withou
 | `codex <name\|main> [codex args…]` | Start Codex on that account's Codex login. |
 | `use <name> [--default] [claude args…]` | Start Claude Code on an account. `hatswap <name>` is equivalent. `--default` also makes it the default. |
 | `exec [--account <name\|main>] <command> [args…]` | Run a command (`claude`, `codex`, a bot) on the account a new session would get now: `--account`, then `HATSWAP_ACCOUNT`, then the folder pin, then the default. No terminal needed. |
+| `usage [name…] [--json]` | Each account's 5-hour and weekly limits and reset times. Read-only. |
+| `statusline [--install\|--remove]` | Show the account in Claude Code's status line, keeping an existing one. |
+| `vscode [name\|main\|--clear]` | Make the Claude extension in VS Code or Cursor use that account in this folder. |
+| `desktop [name\|main]` | Open Claude Desktop signed in to that account, in its own window (macOS). |
 | `shim [--remove]` | Write (or remove) `claude` and `codex` wrappers in `~/.claude-accounts/bin` that run through `exec`. |
 | `main [claude args…]` | Start Claude Code on the main account (`~/.claude`). |
 | `switch <target> [id] [--default] [--yes]` | Continue a conversation on another account, restarting it in its own tab (tmux, Terminal.app, iTerm2) or resuming it here. |
@@ -396,7 +441,7 @@ Briefs are saved to `~/.claude-accounts/.briefs/` with mode `600`.
 <p align="center"><img src="docs/how-it-works.png" alt="Hand-drawn diagram: a shared ~/.claude is symlinked into the main and work accounts, each with its own login; handoff --brief condenses an old session into a ~7 KB brief that seeds a fresh session on another account, the same account (refresh), or Codex" width="900"></p>
 
 - **Isolation.** Each account is a separate [`CLAUDE_CONFIG_DIR`](https://docs.anthropic.com/en/docs/claude-code/settings) under `~/.claude-accounts/<name>`. Claude Code stores one login per configuration directory — in the macOS Keychain, or in the directory itself on Linux — so accounts never overwrite each other. The default account runs with `CLAUDE_CONFIG_DIR` unset.
-- **Sharing.** `settings.json`, `settings.local.json`, `CLAUDE.md`, `agents/`, `skills/`, `plugins/`, `commands/`, `hooks/` and `projects/` are symlinked from `~/.claude`. User-scope MCP servers are copied once when an account is added.
+- **Sharing.** `settings.json`, `settings.local.json`, `CLAUDE.md`, `keybindings.json`, `agents/`, `skills/`, `plugins/`, `commands/`, `hooks/`, `rules/`, `output-styles/` and `projects/` are symlinked from `~/.claude`. User-scope MCP servers are copied once when an account is added.
 - **Session discovery.** Conversations are read from the shared `projects/` directory. Open sessions are detected from each account's session registry and confirmed by process ID.
 - **Switching.** A running Claude Code process cannot change its login, so `switch` restarts it with `--resume` under the other account. If the session's registry entry names a tmux pane, the restart is scheduled through the tmux server (`respawn-pane`), so it works from inside the session and keeps the pane's original start command. Otherwise the session is asked to exit (`SIGTERM`) and resumed in the terminal that ran `switch`.
 - **Private history.** A private account has a real `projects/` folder instead of the shared symlink, and a `.private` marker so it is never re-linked. Session discovery scans every distinct history folder.
@@ -435,7 +480,10 @@ Several tools give each Claude Code account its own configuration directory, inc
 - moving a live conversation to another account (`switch`), restarting it in the same tab;
 - resuming or forking a conversation on another account, and repository-aware handoff briefs, including to Codex;
 - per-folder accounts (`pin`), a default account, and a separate Codex login per account;
-- shared settings, skills, MCP servers and history by default, with private history per account when you need it.
+- shared settings, skills, rules, MCP servers and history by default, with private history per account when you need it;
+- one setup across the terminal, VS Code/Cursor, Claude Desktop and bots (`exec`);
+- `main` runs with `CLAUDE_CONFIG_DIR` unset. Claude Code names its Keychain item after that variable, so setting it to `~/.claude` would look for a login that does not exist, a trap several tools fall into;
+- no automatic rotation between accounts when a limit is hit: `usage` only reports.
 
 ## Changelog
 

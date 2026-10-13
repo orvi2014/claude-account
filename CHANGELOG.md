@@ -20,9 +20,22 @@ All notable changes to this project are documented here. The format follows
   `~/.claude-accounts/bin` that do the same, for bots that call a fixed path or
   search `PATH`. `shim --remove` deletes them.
 - `HATSWAP_ACCOUNT=<name>` keeps one bot on one account.
+- `hatswap usage [name…] [--json]`: every account's 5-hour and weekly limits
+  and reset times, from the endpoint Claude's `/usage` reads. Read-only, cached
+  for 3 minutes; tokens are never printed, stored or refreshed.
+- `hatswap statusline --install`: the account and email in Claude Code's status
+  line, ahead of any status line you already had (`--remove` restores it).
+- `hatswap vscode [name|main|--clear]`: the Claude extension in VS Code or
+  Cursor uses that account in this folder, through
+  `claudeCode.environmentVariables` in `.vscode/settings.json`.
+- `hatswap desktop [name|main]`: Claude Desktop signed in to that account, in
+  its own window, with its own profile folder (macOS).
+- `rules/`, `output-styles/` and `keybindings.json` are now shared across
+  accounts like the rest of `~/.claude`.
 
 ### Changed
-- `bin` is no longer accepted as an account name (the shims live there).
+- `bin` is no longer accepted as an account name (the shims live there), and
+  `usage`, `statusline`, `vscode` and `desktop` are reserved.
 
 ## [0.5.0] - 2026-10-12
 

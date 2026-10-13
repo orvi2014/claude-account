@@ -16,7 +16,7 @@ KEEP_AUTH_ENV="${HATSWAP_KEEP_AUTH_ENV:-${CLAUDE_ACCOUNT_KEEP_AUTH_ENV:-}}"
 SWITCH_DELAY="${HATSWAP_SWITCH_DELAY:-${CLAUDE_ACCOUNT_SWITCH_DELAY:-2}}"
 PIN_FILES=(.hatswap .claude-account)
 MAIN="$HOME/.claude"
-SHARED=(settings.json settings.local.json CLAUDE.md agents skills plugins projects commands hooks)
+SHARED=(settings.json settings.local.json CLAUDE.md keybindings.json agents skills plugins projects commands hooks rules output-styles)
 CODEX_MAIN="$HOME/.codex"
 CODEX_SHARED=(config.toml AGENTS.md prompts rules skills plugins)
 # Bumped whenever the /handoff or /switch templates change.
@@ -67,6 +67,18 @@ Usage: hatswap <command> [name] [claude args...]
                       new session would get right now: pin, then default.
                       For bots and scripts: each call looks the account up
                       again, so a changed default applies without a restart
+  usage [name] [--json]
+                      each account's 5-hour and weekly limits, as Claude's
+                      /usage shows them (cached for 3 minutes)
+  statusline [--install|--remove]
+                      show the account in Claude Code's status line (keeps
+                      a status line you already have, after it)
+  vscode [name|main|--clear]
+                      make the VS Code / Cursor Claude extension use that
+                      account in this folder (default: this folder's pin or
+                      the default account)
+  desktop [name|main] open Claude Desktop signed in to that account (its
+                      own window and login; macOS)
   shim [--remove]     write claude and codex wrappers to $BASE/bin that
                       do 'hatswap exec' for you; put that folder first on a
                       bot's PATH, or point the bot at $BASE/bin/claude
@@ -683,6 +695,231 @@ EOF
   echo "To keep one bot on one account: set HATSWAP_ACCOUNT=<name> in its environment."
 }
 
+# keychain_service <config dir>: the macOS Keychain item holding that
+# account's login. Claude Code names it after a hash of CLAUDE_CONFIG_DIR, so
+# main (variable unset) has the plain name.
+keychain_service() {
+  [[ "$1" == "$MAIN" ]] && { echo "Claude Code-credentials"; return; }
+  echo "Claude Code-credentials-$(printf '%s' "$1" | shasum -a 256 | cut -c1-8)"
+}
+
+account_dirs() {
+  echo "$MAIN"
+  local d
+  [[ -d "$BASE" ]] || return 0
+  for d in "$BASE"/*/; do
+    [[ -d "$d" && "$(basename "$d")" != bin ]] && echo "${d%/}"
+  done
+}
+
+# usage_report [--json] <config dir>...: limits per account, read from the
+# endpoint Claude's /usage uses. Tokens stay inside this process and are
+# never printed or refreshed here (a stale one just says to start Claude).
+usage_report() {
+  local json=0; [[ "${1:-}" == --json ]] && { json=1; shift; }
+  local args=() d
+  for d in "$@"; do args+=("$(account_label "$d")" "$d" "$(keychain_service "$d")"); done
+  python3 - "$json" "$BASE/.usage-cache.json" "$MAIN" "$HOME" "${args[@]}" <<'PY'
+import json, os, subprocess, sys, time, urllib.request, urllib.error, datetime
+as_json, cache_file, main, home = sys.argv[1] == "1", sys.argv[2], sys.argv[3], sys.argv[4]
+rest = sys.argv[5:]
+URL = os.environ.get("HATSWAP_USAGE_URL", "https://api.anthropic.com/api/oauth/usage")
+TTL = 180
+try:
+    cache = json.load(open(cache_file))
+except Exception:
+    cache = {}
+
+def creds(cfg, svc):
+    f = os.path.join(cfg, ".credentials.json")
+    raw = None
+    if sys.platform == "darwin" or os.environ.get("HATSWAP_FAKE_KEYCHAIN"):
+        # Claude Code stores it under the login name; an older item with
+        # another account field can share the service name, so ask for ours.
+        user = os.environ.get("USER") or os.path.basename(home)
+        for extra in (["-a", user], []):
+            r = subprocess.run(["security", "find-generic-password", "-s", svc, *extra, "-w"], capture_output=True, text=True)
+            if r.returncode == 0 and '"claudeAiOauth"' in r.stdout:
+                raw = r.stdout
+                break
+    if raw is None and os.path.exists(f):
+        raw = open(f).read()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw).get("claudeAiOauth") or None
+    except Exception:
+        return None
+
+def email(cfg):
+    p = os.path.join(home if cfg == main else cfg, ".claude.json")
+    try:
+        return (json.load(open(p)).get("oauthAccount") or {}).get("emailAddress") or ""
+    except Exception:
+        return ""
+
+def fetch(label, cfg, svc):
+    hit = cache.get(cfg)
+    if hit and time.time() - hit.get("at", 0) < TTL:
+        return hit["data"], None
+    o = creds(cfg, svc)
+    if not o or not o.get("accessToken"):
+        return None, "not signed in (or an API-key login)"
+    if o.get("expiresAt") and o["expiresAt"] / 1000 < time.time():
+        return (hit or {}).get("data"), "login token expired; start Claude on it once to refresh"
+    req = urllib.request.Request(URL, headers={
+        "Authorization": "Bearer " + o["accessToken"],
+        "anthropic-beta": "oauth-2025-04-20", "User-Agent": "hatswap"})
+    try:
+        d = json.load(urllib.request.urlopen(req, timeout=10))
+    except urllib.error.HTTPError as e:
+        why = "rate-limited; try again in a few minutes" if e.code == 429 else f"HTTP {e.code}"
+        return (hit or {}).get("data"), why
+    except Exception as e:
+        return (hit or {}).get("data"), f"unreachable ({type(e).__name__})"
+    data = {k: d.get(k) for k in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet")}
+    cache[cfg] = {"at": time.time(), "data": data}
+    return data, None
+
+def pct(w):
+    if not w or w.get("utilization") is None:
+        return "-"
+    return f"{w['utilization']:.0f}%"
+
+def when(w):
+    t = (w or {}).get("resets_at")
+    if not t:
+        return ""
+    try:
+        dt = datetime.datetime.fromisoformat(t.replace("Z", "+00:00")).astimezone()
+    except Exception:
+        return ""
+    secs = (dt - datetime.datetime.now().astimezone()).total_seconds()
+    if secs <= 0:
+        return "now"
+    if secs < 86400:
+        return f"in {int(secs // 3600)}h{int(secs % 3600 // 60):02d}m"
+    return dt.strftime("%a %H:%M")
+
+rows = []
+for i in range(0, len(rest), 3):
+    label, cfg, svc = rest[i:i + 3]
+    data, note = fetch(label, cfg, svc)
+    rows.append((label, cfg, data, note))
+try:
+    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+    with open(cache_file + ".tmp", "w") as fh:
+        json.dump(cache, fh)
+    os.chmod(cache_file + ".tmp", 0o600)
+    os.replace(cache_file + ".tmp", cache_file)
+except Exception:
+    pass
+
+if as_json:
+    print(json.dumps([{"account": l, "email": email(c), "usage": d, "note": n} for l, c, d, n in rows], indent=2))
+    sys.exit(0)
+print(f"{'ACCOUNT':<14} {'EMAIL':<30} {'5-HOUR':>6}  {'RESETS':<10} {'WEEK':>5}  RESETS")
+for label, cfg, d, note in rows:
+    d = d or {}
+    line = f"{label:<14} {email(cfg)[:30]:<30} {pct(d.get('five_hour')):>6}  {when(d.get('five_hour')):<10} {pct(d.get('seven_day')):>5}  {when(d.get('seven_day')):<10}"
+    print(line.rstrip() + (f"  ({note})" if note else ""))
+PY
+}
+
+STATUSLINE_NEXT="$BASE/.statusline-next"
+
+# statusline_set <install|remove>: point the shared settings.json status line
+# at hatswap, keeping any command already there to run after it.
+statusline_set() {
+  local self; self="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")"
+  python3 - "$1" "$MAIN/settings.json" "$STATUSLINE_NEXT" "$self statusline" <<'PY'
+import json, os, sys, shutil
+mode, path, nxt, ours = sys.argv[1:5]
+try:
+    s = json.load(open(path)) if os.path.exists(path) else {}
+except Exception:
+    sys.exit(f"{path} is not plain JSON; add this yourself:\n  \"statusLine\": {{\"type\": \"command\", \"command\": \"{ours}\"}}")
+cur = s.get("statusLine") or {}
+is_ours = cur.get("command", "").endswith(" statusline") and "hatswap" in cur.get("command", "")
+if mode == "install":
+    if is_ours:
+        print("The status line already shows the account."); sys.exit(0)
+    if cur.get("command"):
+        os.makedirs(os.path.dirname(nxt), exist_ok=True)
+        json.dump(cur, open(nxt, "w"))
+        print(f"Keeping your status line ({cur['command']}); the account is shown before it.")
+    new = {"type": "command", "command": ours}
+    if "padding" in cur:
+        new["padding"] = cur["padding"]
+    s["statusLine"] = new
+else:
+    if not is_ours:
+        print("The status line is not hatswap's; nothing changed."); sys.exit(0)
+    if os.path.exists(nxt):
+        s["statusLine"] = json.load(open(nxt)); os.remove(nxt)
+        print("Restored your previous status line.")
+    else:
+        s.pop("statusLine", None)
+        print("Removed the account from the status line.")
+if os.path.exists(path):
+    shutil.copy2(path, path + ".hatswap-bak")
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(s, fh, indent=2); fh.write("\n")
+os.replace(tmp, path)
+if mode == "install":
+    print("Every account shares settings.json, so all of them show it. It appears on Claude's next status update.")
+PY
+}
+
+# statusline_print: what Claude Code shows. stdin is its status JSON.
+statusline_print() {
+  local input cur label email next out=""
+  input="$(cat)"
+  cur="${CLAUDE_CONFIG_DIR:-$MAIN}"
+  [[ "${cur%/}" == "$MAIN" ]] && cur="$MAIN"
+  label="$(account_label "$cur")"
+  email="$(email_of "$( [[ "$cur" == "$MAIN" ]] && echo "$HOME" || echo "$cur")")"
+  [[ "$email" == \(* ]] && email=""
+  if [[ -r "$STATUSLINE_NEXT" ]]; then
+    next="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("command",""))' "$STATUSLINE_NEXT" 2>/dev/null)"
+    [[ -n "$next" ]] && out="$(printf '%s' "$input" | bash -c "$next" 2>/dev/null | head -1)"
+  fi
+  printf '\033[2m⎈\033[0m %s%s%s\n' "$label" "${email:+ · $email}" "${out:+  │ $out}"
+}
+
+# vscode_set <file> <config dir or "">: set (or clear, with "") the
+# CLAUDE_CONFIG_DIR the Claude extension passes to Claude in this folder.
+vscode_set() {
+  python3 - "$1" "$2" <<'PY'
+import json, os, sys
+path, value = sys.argv[1], sys.argv[2]
+key = "claudeCode.environmentVariables"
+try:
+    s = json.load(open(path)) if os.path.exists(path) and os.path.getsize(path) else {}
+except Exception:
+    entry = f'{{ "name": "CLAUDE_CONFIG_DIR", "value": "{value}" }}' if value else "(remove the CLAUDE_CONFIG_DIR entry)"
+    sys.exit(f"{path} has comments or is not plain JSON, so it was left alone. Add this yourself:\n  \"{key}\": [ {entry} ]")
+env = s.get(key)
+if isinstance(env, dict):
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    if value:
+        env["CLAUDE_CONFIG_DIR"] = value
+    s[key] = env
+else:
+    env = [e for e in (env or []) if not (isinstance(e, dict) and e.get("name") == "CLAUDE_CONFIG_DIR")]
+    if value:
+        env.append({"name": "CLAUDE_CONFIG_DIR", "value": value})
+    s[key] = env
+if not s[key]:
+    s.pop(key)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path + ".tmp", "w") as fh:
+    json.dump(s, fh, indent=2); fh.write("\n")
+os.replace(path + ".tmp", path)
+PY
+}
+
 need_tty() {
   [[ -t 0 && -t 1 ]] && return 0
   echo "This opens an interactive Claude session; run it in a normal terminal tab (not with ! inside Claude)." >&2
@@ -1163,7 +1400,7 @@ pick_session() {
 case "$cmd" in
   add)
     name="${1:?name required}"; valid "$name"
-    case "$name" in main|hatswap|exec|shim|bin|codex|codex-login|private|update|pin|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
+    case "$name" in main|hatswap|exec|shim|bin|usage|statusline|vscode|desktop|codex|codex-login|private|update|pin|help|version|whoami|current|list|sessions|brief|briefs|handoff|refresh|switch|default|shell-init|setup-shell|use|add|login|remove|save-brief|install-command)
       echo "'$name' is reserved; pick another name" >&2; exit 1 ;; esac
     dir="$(dir_of "$name")"
     [[ -d "$dir" ]] && { echo "Profile $name already exists ($dir)" >&2; exit 1; }
@@ -1365,6 +1602,7 @@ case "$cmd" in
         mkdir -p "$(dirname "$ex")"; echo ".hatswap" >> "$ex"
         echo "Added .hatswap to this repo's local ignore (.git/info/exclude), so it is not committed."
       fi
+      echo "For the Claude extension in VS Code or Cursor here, also run: hatswap vscode"
       ensure_hook
     fi
     ;;
@@ -1503,6 +1741,67 @@ case "$cmd" in
     fi
     [[ -n "${HATSWAP_VERBOSE:-}" ]] && echo "hatswap: running $1 on $name" >&2
     exec env "${e[@]}" "$@"
+    ;;
+  usage)
+    json=(); dirs=()
+    for a in "$@"; do
+      case "$a" in
+        --json) json=(--json) ;;
+        *) dirs+=("$(config_dir_of "$a")"); [[ -d "${dirs[${#dirs[@]}-1]}" ]] || { echo "No profile $a" >&2; exit 1; } ;;
+      esac
+    done
+    if [[ ${#dirs[@]} -eq 0 ]]; then while IFS= read -r d; do dirs+=("$d"); done < <(account_dirs); fi
+    usage_report ${json[@]+"${json[@]}"} "${dirs[@]}"
+    [[ ${#json[@]} -gt 0 ]] || echo "Same numbers as /usage in Claude. Read-only; hatswap never switches accounts for you."
+    ;;
+  statusline)
+    case "${1:-}" in
+      --install) statusline_set install ;;
+      --remove) statusline_set remove ;;
+      "") statusline_print ;;
+      *) echo "usage: hatswap statusline [--install|--remove]" >&2; exit 1 ;;
+    esac
+    ;;
+  vscode)
+    file="$PWD/.vscode/settings.json"
+    if [[ "${1:-}" == --clear ]]; then
+      [[ -f "$file" ]] || { echo "No .vscode/settings.json here" >&2; exit 1; }
+      vscode_set "$file" "" || exit 1
+      echo "The Claude extension in ${PWD/#$HOME/~} is back on your usual login. Reload the window to apply."
+      exit 0
+    fi
+    name="${1:-$(new_session_account | cut -f1)}"
+    dir="$(config_dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    [[ "$dir" == "$MAIN" ]] || link_shared "$dir"
+    # main must leave the variable unset: Claude finds main's login by that.
+    vscode_set "$file" "$( [[ "$dir" == "$MAIN" ]] || echo "$dir")" || exit 1
+    echo "The Claude extension in VS Code / Cursor now uses '$name' ($(email_of "$( [[ "$dir" == "$MAIN" ]] && echo "$HOME" || echo "$dir")")) in ${PWD/#$HOME/~}."
+    echo "Reload the window (Command Palette: Developer: Reload Window). Open this folder itself, not a parent, for it to apply."
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
+        echo "Note: .vscode/settings.json is committed in this repo; don't commit this change (it holds a path on your machine)."
+      elif ! git check-ignore -q "$file" 2>/dev/null; then
+        ex="$(git rev-parse --git-path info/exclude)"; mkdir -p "$(dirname "$ex")"
+        echo ".vscode/settings.json" >> "$ex"
+        echo "Added .vscode/settings.json to this repo's local ignore (.git/info/exclude), so it is not committed."
+      fi
+    fi
+    ;;
+  desktop)
+    [[ "$(uname)" == Darwin ]] || { echo "desktop is for Claude Desktop on macOS" >&2; exit 1; }
+    name="${1:-$(new_session_account | cut -f1)}"
+    dir="$(config_dir_of "$name")"
+    [[ -d "$dir" ]] || { echo "No profile $name" >&2; exit 1; }
+    if [[ "$dir" == "$MAIN" ]]; then
+      open -a Claude; echo "Opened Claude Desktop (main)."
+    else
+      first=0; [[ -d "$dir/desktop" ]] || first=1
+      mkdir -p "$dir/desktop"; chmod 700 "$dir/desktop"
+      open -n -a Claude --args --user-data-dir="$dir/desktop"
+      echo "Opened Claude Desktop as '$name' in its own window."
+      [[ "$first" == 1 ]] && echo "First time: sign in there with $name's account ($(email_of "$dir")). It stays signed in after that."
+    fi
     ;;
   shim)
     if [[ "${1:-}" == --remove ]]; then
